@@ -1,0 +1,2 @@
+model: sonnet
+system_prompt: "@prompts/editor-v3.txt"

@@ -1,0 +1,9 @@
+model: sonnet
+timeout: 900
+workshop: .
+snapshots: true
+pattern: deep-dive.yaml
+system_prompt: |
+  Do NOT use run_in_background: true when spawning sub-agents.
+  Only run sub-agents in foreground.
+  Do not spawn sub-agents from within a sub-agent.
