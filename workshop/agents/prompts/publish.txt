@@ -1,0 +1,47 @@
+There is a draft for you in ibook draft for this ticket. Please read it and if it is good, publish.
+
+`ibook draft read`
+
+Here is an example of good writing:
+
+```
+Good question on the 1990s and at-risk balances. You're half right, and the half you're right about is the important half.
+
+The 1990s: Buffett accumulated 129.7 Moz starting 1997 on the same deficit thesis — production + reclamation running ≈100 Moz/yr below consumption, cumulative deficit reaching 1.2 billion ounces by 2001. The deficit was real. Silver went from $5 to $7 over a decade. Why? Because every ounce of that deficit was absorbed into investment balances — Buffett's vault, not a solar panel. When he liquidated through 2006, the silver came right back.
+
+Today's version is 5x larger. Global ETF holdings ≈718 Moz, LBMA vaults 1.08B oz, plus decades of accumulated coins and bars. The cumulative 820 Moz deficit since 2021 wasn't consumed by industry — it moved from COMEX vaults into ETF vaults. Total at-risk balances: north of 1.5 billion ounces.
+
+You're right that investment-absorbed deficit ≠ industrial consumption. Consumed silver is gone. Investment silver is just waiting.
+
+Where you're wrong — or at least incomplete:
+
+First, the DIRECTION of the buffer matters as much as the stock. Buffett bought during surplus years — inventory was building. Today the buffer is depleting (22 months → 12.3 months coverage). Same mechanism, opposite trajectory.
+
+Second, that 718 Moz in ETFs isn't liquid supply. During the 2011-2015 silver bear market (price fell from $49 to $14), SLV holdings barely moved. ETF holders are sticky. Retail coins and bars are even stickier — last to liquidate. The paper price crashed 35% in Jan-Feb 2026 and physical demand actually INCREASED. Silver Eagles went on allocation, Silver Towne Mint ramped from 200K to 800K oz/week, India reported shortage. Paper and physical are diverging.
+
+Third, COMEX registered inventory — the silver actually available for delivery — is at 82 Moz. That's roughly one month of demand. Lease rates at 8% vs historical <1% confirm genuine physical tightness. The 1.5B oz of at-risk balances EXISTS, but it can't all hit the market at once. Maybe 100-200 Moz could mobilize within 6 months in a sustained bear scenario.
+
+The honest synthesis:
+
+The ex-investment surplus widened to ≈132 Moz in 2025. That's the killer stat. Fabrication demand alone does NOT exceed total supply. The deficit requires investment demand to persist. Strip out ETFs and coins/bars, and the market is in surplus. You're right to flag this.
+
+But the buffer is depleting, physical tightness is real (lease rates, COMEX, India), and byproduct mining means supply CAN'T respond even if price doubles. The best historical analog is uranium 2011-2021: investment overhang suppressed price for a DECADE, then when inventory was finally exhausted, it went $18 to $110.
+
+Silver is on that trajectory. The question is whether we're in 2015 (years of pain ahead) or 2020 (approaching the inflection). The ex-investment surplus says probably closer to 2015. COMEX registered says maybe closer to 2018.
+
+Either way — the post should have centered this. 'Fifth consecutive deficit' without the ex-investment qualification is half the story.
+```
+
+
+It's tight. It feels like it _means_ something.
+
+If it is not up to standard - send back the writer with [REVISE].
+
+If it is A+ - send it with ibook publish, or say [PUBLISH]. `ibook draft publish`.
+
+If there is an error and it can't be published. say [ERROR].
+
+If there are internal links to files, internal id's, or private fund information - remove them. We do not disclose our positions.
+Also if there are any recommendations for positions, make sure we do not create liability. Giving opinion is fine. Directing to buy is not.
+
+You can either fix these yourself - or send back to writer to fix.

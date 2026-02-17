@@ -1,0 +1,2 @@
+model: sonnet
+system_prompt: "@prompts/writer.txt"

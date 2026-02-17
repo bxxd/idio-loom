@@ -1,0 +1,24 @@
+name: deep-dive
+
+stages:
+  - name: research
+    agent: axe
+    nudge: "investigate the topic — pull filings, transcripts, data. form a thesis."
+
+  - name: critique
+    agent: bobby
+    source: axe
+    nudge: "attack this thesis. find gaps, check math, challenge assumptions."
+
+  - name: rebut
+    agent: axe
+    source: bobby
+
+  - name: write
+    agent: writer
+    source: all
+    nudge: "write the post"
+
+  - name: edit
+    agent: editor
+    source: writer
