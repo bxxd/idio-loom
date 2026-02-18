@@ -2,7 +2,7 @@ mod claude;
 mod config;
 mod loom;
 mod meta;
-mod pattern;
+mod script;
 mod snapshot;
 
 use anyhow::{bail, Context, Result};
@@ -91,8 +91,8 @@ fn main() -> Result<()> {
         "list" | "ls" => list_threads(&config),
         "agents" => {
             let sub = args.get(1).map(|s| s.as_str());
-            // loom agents show <name> → show_agent with args[2]
-            // loom agents <name> → show_agent with args[1]
+            // loom agents show <name> -> show_agent with args[2]
+            // loom agents <name> -> show_agent with args[1]
             let sub = match sub {
                 Some("show") => args.get(2).map(|s| s.as_str()).or(Some("show")),
                 other => other,
@@ -115,29 +115,28 @@ fn main() -> Result<()> {
             thread_cmd(&config, name, rest, &flags)
         }
         _ => {
-            bail!("unknown command '{}' — try `loom help`", args[0]);
+            bail!("unknown command '{}' -- try `loom help`", args[0]);
         }
     }
 }
 
-/// Resolve a pattern file path — relative to patterns_dir, absolute passed through
+/// Resolve a pattern file path — .sh scripts only
 fn resolve_pattern_path(config: &Config, pattern_ref: &str) -> String {
     let p = Path::new(pattern_ref);
     if p.is_absolute() {
-        pattern_ref.to_string()
-    } else {
-        config.patterns_dir().join(pattern_ref).to_string_lossy().to_string()
+        return pattern_ref.to_string();
     }
-}
-
-/// Load pattern from ref, apply overrides, init thread. Shared by start/run.
-fn load_and_init(config: &Config, name: &str, pattern_ref: &str, flags: &Flags) -> Result<(Config, Meta, pattern::Pattern)> {
-    let pattern_path = resolve_pattern_path(config, pattern_ref);
-    let pat = pattern::load_pattern(&pattern_path)?;
-    let mut cfg = config.clone();
-    pattern::apply_overrides(&mut cfg, &pat)?;
-    let meta = init_thread(&cfg, name, pattern_ref, &pat, flags)?;
-    Ok((cfg, meta, pat))
+    let base = config.patterns_dir().join(pattern_ref);
+    if base.exists() {
+        return base.to_string_lossy().to_string();
+    }
+    // Try adding .sh extension
+    let with_ext = config.patterns_dir().join(format!("{}.sh", pattern_ref));
+    if with_ext.exists() {
+        return with_ext.to_string_lossy().to_string();
+    }
+    // Fall through — caller reports the error
+    base.to_string_lossy().to_string()
 }
 
 fn thread_cmd(config: &Config, name: &str, args: &[String], flags: &Flags) -> Result<()> {
@@ -148,38 +147,30 @@ fn thread_cmd(config: &Config, name: &str, args: &[String], flags: &Flags) -> Re
     let cmd = &args[0];
 
     match cmd.as_str() {
-        "start" => {
-            let pattern_ref = args.get(1).map(|s| s.as_str())
-                .or(config.pattern.as_deref())
-                .ok_or_else(|| anyhow::anyhow!("usage: loom t <name> start [pattern.yaml]"))?;
-            let (_cfg, meta, pat) = load_and_init(config, name, pattern_ref, flags)?;
-            let pattern_name = pat.name.as_deref().unwrap_or(pattern_ref);
-            eprintln!("started {} with pattern {} ({} stages, snapshots: {})",
-                name, pattern_name, pat.stages.len(),
-                if meta.snapshots { "on" } else { "off" });
-            Ok(())
-        }
-
         "run" => {
             let pattern_ref = args.get(1).map(|s| s.as_str())
                 .or(config.pattern.as_deref())
-                .ok_or_else(|| anyhow::anyhow!("usage: loom t <name> run [pattern.yaml]"))?;
-            let (cfg, mut meta, pat) = load_and_init(config, name, pattern_ref, flags)?;
-            let pattern_name = pat.name.as_deref().unwrap_or(pattern_ref);
-            eprintln!("running {} with pattern {} ({} stages)",
-                name, pattern_name, pat.stages.len());
-            pattern::run_all(&cfg, &mut meta, &pat, flags.model.as_deref())
-        }
+                .ok_or_else(|| anyhow::anyhow!("usage: loom t <name> run <script> [\"intake\"]"))?;
+            let intake = args.get(2).map(|s| s.as_str())
+                .or(flags.nudge.as_deref());
 
-        "next" => {
-            let mut meta = Meta::read(config, name)?;
-            let pattern_ref = meta.pattern.clone()
-                .ok_or_else(|| anyhow::anyhow!("no pattern — use `loom t {} start <pattern.yaml>`", name))?;
-            let pattern_path = resolve_pattern_path(config, &pattern_ref);
-            let pat = pattern::load_pattern(&pattern_path)?;
-            let mut cfg = config.clone();
-            pattern::apply_overrides(&mut cfg, &pat)?;
-            pattern::run_next(&cfg, &mut meta, &pat, flags.model.as_deref())
+            let script_path = resolve_pattern_path(config, pattern_ref);
+            if !Path::new(&script_path).exists() {
+                bail!("pattern not found: {} (looked for {})", pattern_ref, script_path);
+            }
+
+            // Init thread meta
+            let meta_path = Meta::meta_path(config, name);
+            if meta_path.exists() && !flags.force {
+                bail!("thread '{}' already exists -- use --force to overwrite", name);
+            }
+            let snapshots = flags.snapshot.unwrap_or(config.snapshots);
+            let mut meta = Meta::new(name, snapshots);
+            meta.script = Some(pattern_ref.to_string());
+            meta.save(config)?;
+
+            eprintln!("running {} with script {}", name, pattern_ref);
+            script::run_script(config, name, &script_path, intake, flags.model.as_deref())
         }
 
         "show" => show(config, name),
@@ -206,25 +197,19 @@ fn thread_cmd(config: &Config, name: &str, args: &[String], flags: &Flags) -> Re
             let remaining = &args[2..];
             let (source, positional_nudge) = parse_turn_args(remaining)?;
             let nudge = flags.nudge.as_deref().or(positional_nudge.as_deref());
-            loom::run_turn(config, name, speaker, source.as_deref(), nudge, flags.model.as_deref(), None)
+
+            // Check LOOM_MODEL env var as fallback for model override
+            let env_model = std::env::var("LOOM_MODEL").ok();
+            let model_override = flags.model.as_deref()
+                .or(env_model.as_deref())
+                .filter(|s| !s.is_empty());
+
+            loom::run_turn(config, name, speaker, source.as_deref(), nudge, model_override, None)
         }
         _ => {
-            bail!("unknown thread command '{}' — try `loom help`", cmd);
+            bail!("unknown thread command '{}' -- try `loom help`", cmd);
         }
     }
-}
-
-/// Init a thread — store pattern ref and agents file in meta
-fn init_thread(config: &Config, name: &str, pattern_ref: &str, _pattern: &pattern::Pattern, flags: &Flags) -> Result<Meta> {
-    let meta_path = Meta::meta_path(config, name);
-    if meta_path.exists() && !flags.force {
-        bail!("thread '{}' already exists — use --force to overwrite", name);
-    }
-
-    let snapshots = flags.snapshot.unwrap_or(config.snapshots);
-    let meta = Meta::init_pattern(name, pattern_ref, snapshots);
-    meta.save(config)?;
-    Ok(meta)
 }
 
 fn parse_turn_args(args: &[String]) -> Result<(Option<String>, Option<String>)> {
@@ -272,18 +257,15 @@ fn list_threads(config: &Config) -> Result<()> {
         match Meta::read(config, &name) {
             Ok(meta) => {
                 let agents: Vec<_> = meta.agents.keys().map(|s| s.as_str()).collect();
-                let pattern_str = meta.pattern.as_deref().unwrap_or("manual");
-                let stage_str = meta.pattern_stage
-                    .map(|s| format!(" stage {}", s))
-                    .unwrap_or_default();
+                let script_str = meta.script.as_deref().unwrap_or("manual");
                 let cost: f64 = meta.thread.iter().filter_map(|t| t.cost_usd).sum();
-                println!("  {} — {} turns, {} [{}{}] ${:.3}",
+                println!("  {} -- {} turns, {} [{}] ${:.3}",
                     name, meta.thread.len(),
                     agents.join(", "),
-                    pattern_str, stage_str, cost);
+                    script_str, cost);
             }
             Err(_) => {
-                println!("  {} — (corrupt meta)", name);
+                println!("  {} -- (corrupt meta)", name);
             }
         }
     }
@@ -294,15 +276,12 @@ fn show(config: &Config, name: &str) -> Result<()> {
     let meta = Meta::read(config, name)?;
     let agents: Vec<_> = meta.agents.keys().collect();
 
-    let pattern_str = meta.pattern.as_deref().unwrap_or("manual");
-    let stage_str = meta.pattern_stage
-        .map(|s| format!(", stage {}", s))
-        .unwrap_or_default();
+    let script_str = meta.script.as_deref().unwrap_or("manual");
 
-    println!("{} ({} turns, {} agents: {}) [{}{}]",
+    println!("{} ({} turns, {} agents: {}) [{}]",
         name, meta.thread.len(), agents.len(),
         agents.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", "),
-        pattern_str, stage_str);
+        script_str);
 
     let mut total_cost = 0.0;
     let mut total_elapsed = 0.0;
@@ -371,11 +350,8 @@ fn reset_thread(config: &Config, name: &str) -> Result<()> {
     let meta = Meta::read(config, name)?;
     snapshot::cleanup_sessions(&meta)?;
 
-    let new_meta = if let Some(ref pattern) = meta.pattern {
-        Meta::init_pattern(name, pattern, meta.snapshots)
-    } else {
-        Meta::new(name, meta.snapshots)
-    };
+    let mut new_meta = Meta::new(name, meta.snapshots);
+    new_meta.script = meta.script.clone();
 
     for entry in std::fs::read_dir(&run_dir)? {
         let entry = entry?;
@@ -448,8 +424,9 @@ fn cmd_patterns(config: &Config, sub: Option<&str>, args: &[String]) -> Result<(
             .ok_or_else(|| anyhow::anyhow!("usage: loom patterns set <name>"))?;
         // Verify pattern exists
         let path = resolve_pattern_path(config, name);
-        let pat = pattern::load_pattern(&path)
-            .with_context(|| format!("pattern '{}' not found or invalid", name))?;
+        if !Path::new(&path).exists() {
+            bail!("pattern '{}' not found at {}", name, path);
+        }
         // Update loom.yaml
         let yaml_path = config.home.join("loom.yaml");
         let text = std::fs::read_to_string(&yaml_path)
@@ -464,32 +441,22 @@ fn cmd_patterns(config: &Config, sub: Option<&str>, args: &[String]) -> Result<(
             format!("{}{}\n", text, new_line)
         };
         std::fs::write(&yaml_path, &updated)?;
-        let display_name = pat.name.as_deref().unwrap_or(name);
-        eprintln!("set default pattern: {} ({} stages)", display_name, pat.stages.len());
+        eprintln!("set default pattern: {}", name);
         return Ok(());
     }
 
     if sub == Some("show") {
-        // loom patterns show [name] — show specific or default
+        // loom patterns show [name] — cat the script
         let pattern_ref = args.get(2).map(|s| s.as_str())
             .or(config.pattern.as_deref())
-            .ok_or_else(|| anyhow::anyhow!("no default pattern set — use: loom patterns show <name>"))?;
+            .ok_or_else(|| anyhow::anyhow!("no default pattern set -- use: loom patterns show <name>"))?;
         let path = resolve_pattern_path(config, pattern_ref);
-        let pat = pattern::load_pattern(&path)?;
-        let name = pat.name.as_deref().unwrap_or(pattern_ref);
-        println!("{} ({} stages)", name, pat.stages.len());
-        for (i, stage) in pat.stages.iter().enumerate() {
-            let source = stage.source.as_ref().map(|s| format!(" < {}", s)).unwrap_or_default();
-            let nudge = stage.nudge.as_ref().map(|n| {
-                let preview = if n.len() > 50 { &n[..50] } else { n };
-                format!(" \"{}\"", preview)
-            }).unwrap_or_default();
-            let model = stage.model.as_ref().map(|m| format!(" ({})", m)).unwrap_or_default();
-            println!("  {}. {} — {}{}{}{}", i + 1, stage.name, stage.agent, source, nudge, model);
-        }
+        let content = std::fs::read_to_string(&path)
+            .with_context(|| format!("reading pattern: {}", path))?;
+        println!("{}", content);
         Ok(())
     } else if let Some(unknown) = sub {
-        bail!("unknown patterns command '{}' — try: loom patterns [show|set]", unknown);
+        bail!("unknown patterns command '{}' -- try: loom patterns [show|set]", unknown);
     } else {
         let patterns_dir = config.patterns_dir();
         if !patterns_dir.exists() {
@@ -501,7 +468,7 @@ fn cmd_patterns(config: &Config, sub: Option<&str>, args: &[String]) -> Result<(
             .filter_map(|e| e.ok())
             .filter(|e| {
                 let name = e.file_name().to_string_lossy().to_string();
-                name.ends_with(".yaml") || name.ends_with(".yml")
+                name.ends_with(".sh")
             })
             .collect();
 
@@ -516,17 +483,10 @@ fn cmd_patterns(config: &Config, sub: Option<&str>, args: &[String]) -> Result<(
 
         for entry in &entries {
             let filename = entry.file_name().to_string_lossy().to_string();
-            let is_default = filename == default;
+            let stem = filename.trim_end_matches(".sh");
+            let is_default = stem == default || filename == default;
             let marker = if is_default { " *" } else { "" };
-            match pattern::load_pattern(entry.path().to_str().unwrap()) {
-                Ok(pat) => {
-                    let name = pat.name.as_deref().unwrap_or(&filename);
-                    println!("  {} — {} stages{}", name, pat.stages.len(), marker);
-                }
-                Err(_) => {
-                    println!("  {} — (invalid){}", filename, marker);
-                }
-            }
+            println!("  {}{}", stem, marker);
         }
         Ok(())
     }
@@ -546,7 +506,7 @@ fn cmd_init(flags: &Flags) -> Result<()> {
 
     let yaml_path = base.join("loom.yaml");
     if yaml_path.exists() && !flags.force {
-        eprintln!("loom.yaml already exists — use --force to overwrite");
+        eprintln!("loom.yaml already exists -- use --force to overwrite");
     } else {
         let content = "model: sonnet\ntimeout: 900\nworkshop: .\nsnapshots: true\n";
         std::fs::write(&yaml_path, content)?;
@@ -554,14 +514,14 @@ fn cmd_init(flags: &Flags) -> Result<()> {
     }
 
     eprintln!("initialized {}/", target);
-    eprintln!("  agents/          — agent definitions and prompt files");
-    eprintln!("  patterns/        — pattern definitions");
-    eprintln!("  .loom/runs/      — thread state");
+    eprintln!("  agents/          -- agent definitions and prompt files");
+    eprintln!("  patterns/        -- bash script patterns");
+    eprintln!("  .loom/runs/      -- thread state");
     Ok(())
 }
 
 fn print_usage() {
-    eprintln!("loom — session-based multi-agent research");
+    eprintln!("loom -- session-based multi-agent research");
     eprintln!();
     eprintln!("setup:");
     eprintln!("  loom init [path]                                         # scaffold loom workspace");
@@ -575,13 +535,11 @@ fn print_usage() {
     eprintln!();
     eprintln!("patterns:");
     eprintln!("  loom patterns                                            # list available patterns");
-    eprintln!("  loom patterns show [name]                                # show pattern (default if no name)");
+    eprintln!("  loom patterns show [name]                                # show pattern script");
     eprintln!("  loom patterns set <name>                                 # set default pattern");
     eprintln!();
-    eprintln!("pattern mode:");
-    eprintln!("  loom thread <name> start [pattern.yaml]                  # init thread with pattern");
-    eprintln!("  loom thread <name> run [pattern.yaml]                    # start + run all stages");
-    eprintln!("  loom thread <name> next                                  # run next pattern stage");
+    eprintln!("script mode:");
+    eprintln!("  loom thread <name> run <script> [\"intake\"]               # run bash script pattern");
     eprintln!();
     eprintln!("manual mode:");
     eprintln!("  loom thread <name> do <agent> [\"nudge\"]                  # agent speaks");
@@ -606,4 +564,11 @@ fn print_usage() {
     eprintln!("  --no-snapshot          disable snapshots");
     eprintln!("  --force, -f            overwrite existing thread");
     eprintln!("  --input, -i            show input instead of output (for read)");
+    eprintln!();
+    eprintln!("env vars (for scripts):");
+    eprintln!("  LOOM_NAME              thread name");
+    eprintln!("  LOOM_INTAKE            intake text");
+    eprintln!("  LOOM_DIR               state directory (.loom)");
+    eprintln!("  LOOM_RUN_DIR           run directory (.loom/runs/<name>)");
+    eprintln!("  LOOM_MODEL             model override (read by `do` command)");
 }

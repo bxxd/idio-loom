@@ -41,7 +41,7 @@ pub fn run_turn(
     std::fs::create_dir_all(&run_dir)?;
     init_scratchpad(config, name)?;
 
-    let mut meta = Meta::read(config, name)?;
+    let mut meta = Meta::read_or_create(config, name, config.snapshots)?;
     meta.name = name.to_string();
     let agent = meta.ensure_agent(speaker).clone();
 
@@ -59,7 +59,7 @@ pub fn run_turn(
     print_turn_start(turn_n, stage_name, speaker, source, nudge, &model);
 
     let t0 = Instant::now();
-    let result = if let Some(ref sid) = agent.session_id {
+    let result = if let Some(ref sid) = agent.session_id.as_deref().filter(|s| !s.is_empty()) {
         claude::claude_resume(sid, &msg, config.timeout)?
     } else {
         let scratchpad_dir = run_dir.join("scratchpad");
@@ -72,11 +72,15 @@ pub fn run_turn(
     let elapsed = t0.elapsed().as_secs_f64();
 
     // Update state
-    meta.agents.get_mut(speaker).unwrap().session_id = Some(result.session_id.clone());
+    meta.ensure_agent(speaker).session_id = Some(result.session_id.clone());
     let input_file = run_dir.join(format!("turn-{}-{}.input.md", turn_n, speaker));
     std::fs::write(&input_file, &msg)?;
     let turn_file = Meta::turn_file(config, name, turn_n, speaker);
     std::fs::write(&turn_file, &result.result)?;
+
+    // Write .last_output for script consumption
+    let last_output = run_dir.join(".last_output");
+    std::fs::copy(&turn_file, &last_output)?;
 
     meta.thread.push(Turn {
         turn: turn_n,
