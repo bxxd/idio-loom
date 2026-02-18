@@ -107,6 +107,11 @@ impl Config {
         }
     }
 
+    /// Patterns directory
+    pub fn patterns_dir(&self) -> PathBuf {
+        self.workshop_dir().join("patterns")
+    }
+
     /// State directory — resolved from `state` field (absolute or relative to home)
     pub fn state_dir(&self) -> PathBuf {
         let p = Path::new(&self.state);

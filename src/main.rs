@@ -92,6 +92,7 @@ fn main() -> Result<()> {
             };
             cmd_agents(&config, sub)
         }
+        "patterns" | "p" => cmd_patterns(&config, &args[1..]),
         "thread" | "t" => {
             if args.len() < 2 {
                 bail!("usage: loom thread <name> [command]");
@@ -307,6 +308,74 @@ fn reset_thread(config: &Config, name: &str) -> Result<()> {
     Ok(())
 }
 
+fn cmd_patterns(config: &Config, args: &[String]) -> Result<()> {
+    let patterns_dir = config.patterns_dir();
+
+    if args.is_empty() {
+        // loom patterns — list scripts
+        if !patterns_dir.exists() {
+            eprintln!("no patterns directory: {}", patterns_dir.display());
+            return Ok(());
+        }
+        let mut entries: Vec<_> = std::fs::read_dir(&patterns_dir)?
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().is_file())
+            .collect();
+        if entries.is_empty() {
+            eprintln!("no patterns in {}", patterns_dir.display());
+            return Ok(());
+        }
+        entries.sort_by_key(|e| e.file_name());
+        for entry in &entries {
+            let name = entry.file_name().to_string_lossy().to_string();
+            let stem = name.trim_end_matches(".sh");
+            println!("  {}", stem);
+        }
+        return Ok(());
+    }
+
+    match args[0].as_str() {
+        "run" => {
+            let name = args.get(1)
+                .ok_or_else(|| anyhow::anyhow!("usage: loom patterns run <name> [args...]"))?;
+            let script = resolve_pattern(config, name)?;
+            let pass_through: Vec<&str> = args[2..].iter().map(|s| s.as_str()).collect();
+            let status = std::process::Command::new("bash")
+                .arg(&script)
+                .args(&pass_through)
+                .status()?;
+            if !status.success() {
+                bail!("script exited with {}", status);
+            }
+            Ok(())
+        }
+        "show" => {
+            let name = args.get(1)
+                .ok_or_else(|| anyhow::anyhow!("usage: loom patterns show <name>"))?;
+            let script = resolve_pattern(config, name)?;
+            let content = std::fs::read_to_string(&script)?;
+            println!("{}", content);
+            Ok(())
+        }
+        _ => bail!("usage: loom patterns [run <name> [args...] | show <name>]"),
+    }
+}
+
+fn resolve_pattern(config: &Config, name: &str) -> Result<String> {
+    let dir = config.patterns_dir();
+    // Exact match
+    let exact = dir.join(name);
+    if exact.is_file() {
+        return Ok(exact.to_string_lossy().to_string());
+    }
+    // Try .sh
+    let with_sh = dir.join(format!("{}.sh", name));
+    if with_sh.is_file() {
+        return Ok(with_sh.to_string_lossy().to_string());
+    }
+    bail!("pattern '{}' not found in {}", name, dir.display())
+}
+
 fn cmd_agents(config: &Config, sub: Option<&str>) -> Result<()> {
     if let Some(name) = sub {
         let name = if name == "show" { return bail_no_agent_name(); } else { name };
@@ -405,11 +474,16 @@ fn print_usage() {
     eprintln!("  loom thread <name> reset                                 # wipe turns");
     eprintln!("  loom thread <name> delete                                # remove thread");
     eprintln!();
+    eprintln!("patterns:");
+    eprintln!("  loom patterns                                            # list patterns");
+    eprintln!("  loom patterns run <name> [args...]                       # run pattern script");
+    eprintln!("  loom patterns show <name>                                # show pattern source");
+    eprintln!();
     eprintln!("agents:");
     eprintln!("  loom agents                                              # list agents");
     eprintln!("  loom agents show <name>                                  # show agent details");
     eprintln!();
-    eprintln!("shortcuts: t = thread, ls = list, rm = delete, clear = reset");
+    eprintln!("shortcuts: t = thread, p = patterns, ls = list, rm = delete, clear = reset");
     eprintln!();
     eprintln!("flags:");
     eprintln!("  --model <model>        override model for this turn");
