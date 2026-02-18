@@ -10,8 +10,6 @@ fn default_true() -> bool { true }
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Meta {
     pub name: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub script: Option<String>,
     #[serde(default = "default_true")]
     pub snapshots: bool,
     #[serde(default)]
@@ -45,7 +43,6 @@ impl Meta {
     pub fn new(name: &str, snapshots: bool) -> Self {
         Self {
             name: name.to_string(),
-            script: None,
             snapshots,
             agents: HashMap::new(),
             thread: Vec::new(),
@@ -72,7 +69,7 @@ impl Meta {
         Ok(meta)
     }
 
-    /// Read meta or create new if thread doesn't exist yet (for manual mode `do`)
+    /// Read meta or create new if thread doesn't exist yet (for `do`)
     pub fn read_or_create(config: &Config, name: &str, snapshots: bool) -> Result<Self> {
         let path = Self::meta_path(config, name);
         if !path.exists() {
