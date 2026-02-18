@@ -24,9 +24,6 @@ pub struct Config {
     pub snapshots: bool,
     #[serde(default)]
     pub system_prompt: String,
-    /// Default pattern filename (resolved relative to workshop/patterns/)
-    #[serde(default)]
-    pub pattern: Option<String>,
 
     /// Directory containing loom.yaml (set after load, not serialized)
     #[serde(skip)]
@@ -108,11 +105,6 @@ impl Config {
         } else {
             self.home.join(p)
         }
-    }
-
-    /// Patterns directory
-    pub fn patterns_dir(&self) -> PathBuf {
-        self.workshop_dir().join("patterns")
     }
 
     /// State directory — resolved from `state` field (absolute or relative to home)
