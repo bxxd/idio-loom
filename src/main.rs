@@ -334,10 +334,18 @@ fn cmd_patterns(config: &Config, args: &[String]) -> Result<()> {
         return Ok(());
     }
 
-    match args[0].as_str() {
+    // loom p <name> [show|run] [args...]
+    let name = &args[0];
+    let sub = args.get(1).map(|s| s.as_str()).unwrap_or("show");
+
+    match sub {
+        "show" => {
+            let script = resolve_pattern(config, name)?;
+            let content = std::fs::read_to_string(&script)?;
+            println!("{}", content);
+            Ok(())
+        }
         "run" => {
-            let name = args.get(1)
-                .ok_or_else(|| anyhow::anyhow!("usage: loom patterns run <name> [args...]"))?;
             let script = resolve_pattern(config, name)?;
             let pass_through: Vec<&str> = args[2..].iter().map(|s| s.as_str()).collect();
             let status = std::process::Command::new("bash")
@@ -349,15 +357,7 @@ fn cmd_patterns(config: &Config, args: &[String]) -> Result<()> {
             }
             Ok(())
         }
-        "show" => {
-            let name = args.get(1)
-                .ok_or_else(|| anyhow::anyhow!("usage: loom patterns show <name>"))?;
-            let script = resolve_pattern(config, name)?;
-            let content = std::fs::read_to_string(&script)?;
-            println!("{}", content);
-            Ok(())
-        }
-        _ => bail!("usage: loom patterns [run <name> [args...] | show <name>]"),
+        _ => bail!("unknown patterns command '{}' -- try: loom p <name> [show|run]", sub),
     }
 }
 
@@ -476,8 +476,8 @@ fn print_usage() {
     eprintln!();
     eprintln!("patterns:");
     eprintln!("  loom patterns                                            # list patterns");
-    eprintln!("  loom patterns run <name> [args...]                       # run pattern script");
-    eprintln!("  loom patterns show <name>                                # show pattern source");
+    eprintln!("  loom patterns <name> show                                # show pattern source");
+    eprintln!("  loom patterns <name> run [args...]                       # run pattern script");
     eprintln!();
     eprintln!("agents:");
     eprintln!("  loom agents                                              # list agents");
