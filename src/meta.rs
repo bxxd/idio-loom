@@ -11,9 +11,7 @@ fn default_true() -> bool { true }
 pub struct Meta {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pattern: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pattern_stage: Option<usize>,
+    pub script: Option<String>,
     #[serde(default = "default_true")]
     pub snapshots: bool,
     #[serde(default)]
@@ -47,33 +45,11 @@ impl Meta {
     pub fn new(name: &str, snapshots: bool) -> Self {
         Self {
             name: name.to_string(),
-            pattern: None,
-            pattern_stage: None,
+            script: None,
             snapshots,
             agents: HashMap::new(),
             thread: Vec::new(),
         }
-    }
-
-    pub fn init_pattern(name: &str, pattern_file: &str, snapshots: bool) -> Self {
-        Self {
-            name: name.to_string(),
-            pattern: Some(pattern_file.to_string()),
-            pattern_stage: Some(0),
-            snapshots,
-            agents: HashMap::new(),
-            thread: Vec::new(),
-        }
-    }
-
-    pub fn advance_stage(&mut self) {
-        if let Some(ref mut stage) = self.pattern_stage {
-            *stage += 1;
-        }
-    }
-
-    pub fn current_stage(&self) -> usize {
-        self.pattern_stage.unwrap_or(0)
     }
 
     pub fn run_dir(config: &Config, name: &str) -> PathBuf {
@@ -87,7 +63,20 @@ impl Meta {
     pub fn read(config: &Config, name: &str) -> Result<Self> {
         let path = Self::meta_path(config, name);
         if !path.exists() {
-            return Ok(Meta::new(name, true));
+            anyhow::bail!("thread '{}' not found", name);
+        }
+        let text = std::fs::read_to_string(&path)
+            .with_context(|| format!("reading {}", path.display()))?;
+        let meta: Meta = serde_json::from_str(&text)
+            .with_context(|| format!("parsing {}", path.display()))?;
+        Ok(meta)
+    }
+
+    /// Read meta or create new if thread doesn't exist yet (for manual mode `do`)
+    pub fn read_or_create(config: &Config, name: &str, snapshots: bool) -> Result<Self> {
+        let path = Self::meta_path(config, name);
+        if !path.exists() {
+            return Ok(Meta::new(name, snapshots));
         }
         let text = std::fs::read_to_string(&path)
             .with_context(|| format!("reading {}", path.display()))?;
