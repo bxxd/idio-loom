@@ -11,6 +11,7 @@ use meta::Meta;
 
 struct Flags {
     model: Option<String>,
+    use_system: Option<String>,
     nudge: Option<String>,
     dir: Option<String>,
     force: bool,
@@ -20,6 +21,7 @@ struct Flags {
 
 fn extract_flags(args: Vec<String>) -> Flags {
     let mut model = None;
+    let mut use_system = None;
     let mut nudge = None;
     let mut dir = None;
     let mut force = false;
@@ -28,6 +30,14 @@ fn extract_flags(args: Vec<String>) -> Flags {
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
+            "--use-system" => {
+                if i + 1 < args.len() {
+                    use_system = Some(args[i + 1].clone());
+                    i += 2;
+                } else {
+                    i += 1;
+                }
+            }
             "--model" => {
                 if i + 1 < args.len() {
                     model = Some(args[i + 1].clone());
@@ -57,7 +67,7 @@ fn extract_flags(args: Vec<String>) -> Flags {
             _ => { positional.push(args[i].clone()); i += 1; }
         }
     }
-    Flags { model, nudge, dir, force, input, positional }
+    Flags { model, use_system, nudge, dir, force, input, positional }
 }
 
 fn main() -> Result<()> {
@@ -133,7 +143,7 @@ fn thread_cmd(config: &Config, name: &str, args: &[String], flags: &Flags) -> Re
                 .or(env_model.as_deref())
                 .filter(|s| !s.is_empty());
 
-            loom::run_turn(config, name, speaker, source.as_deref(), nudge, model_override, None)
+            loom::run_turn(config, name, speaker, source.as_deref(), nudge, model_override, flags.use_system.as_deref(), None)
         }
 
         "show" => show(config, name),
@@ -204,9 +214,22 @@ fn list_threads(config: &Config) -> Result<()> {
             Ok(meta) => {
                 let agents: Vec<_> = meta.agents.keys().map(|s| s.as_str()).collect();
                 let cost: f64 = meta.thread.iter().filter_map(|t| t.cost_usd).sum();
-                println!("  {} -- {} turns, {} ${:.3}",
-                    name, meta.thread.len(),
-                    agents.join(", "), cost);
+                let elapsed: f64 = meta.thread.iter().map(|t| t.elapsed_s).sum();
+                let running = if let Some(ref r) = meta.running {
+                    let r_elapsed = elapsed_since(&r.started_at);
+                    format!(" ▶ {} {} ({})", r.agent, r.model, fmt_duration(r_elapsed))
+                } else {
+                    String::new()
+                };
+                if meta.thread.is_empty() && meta.running.is_some() {
+                    println!("  {} --{}", name, running);
+                } else if meta.thread.is_empty() {
+                    println!("  {} -- (no turns)", name);
+                } else {
+                    println!("  {} -- {} turns, {} {}, ${:.3}{}",
+                        name, meta.thread.len(),
+                        agents.join(", "), fmt_duration(elapsed), cost, running);
+                }
             }
             Err(_) => {
                 println!("  {} -- (corrupt meta)", name);
@@ -218,6 +241,10 @@ fn list_threads(config: &Config) -> Result<()> {
 
 fn show(config: &Config, name: &str) -> Result<()> {
     let meta = Meta::read(config, name)?;
+    if meta.thread.is_empty() && meta.running.is_none() {
+        println!("{} (no turns yet)", name);
+        return Ok(());
+    }
     let agents: Vec<_> = meta.agents.keys().collect();
 
     println!("{} ({} turns, {} agents: {})",
@@ -234,20 +261,38 @@ fn show(config: &Config, name: &str) -> Result<()> {
             format!(" \"{}\"", preview)
         }).unwrap_or_default();
         let cost = turn.cost_usd.map(|c| format!(" ${:.3}", c)).unwrap_or_default();
+        let model = turn.model.as_ref().map(|m| format!(" {}", m)).unwrap_or_default();
 
-        println!("  [{}] {}{}{}{} ({:.0}s, {} chars{})",
-            turn.turn, turn.agent, stage, source, nudge, turn.elapsed_s, turn.chars, cost);
+        println!("  [{}] {}{}{}{}{} ({}, {} chars{})",
+            turn.turn, turn.agent, model, stage, source, nudge, fmt_duration(turn.elapsed_s), turn.chars, cost);
 
         total_cost += turn.cost_usd.unwrap_or(0.0);
         total_elapsed += turn.elapsed_s;
     }
 
+    // Show currently running turn
+    if let Some(ref r) = meta.running {
+        let elapsed = elapsed_since(&r.started_at);
+        println!("  [{}] {} {} ▶ running ({})",
+            r.turn, r.agent, r.model, fmt_duration(elapsed));
+    }
+
     if !meta.thread.is_empty() {
         println!("  ────────────────────────");
-        println!("  total: {:.0}s, ${:.3}", total_elapsed, total_cost);
+        println!("  total: {}, ${:.3}", fmt_duration(total_elapsed), total_cost);
     }
 
     Ok(())
+}
+
+fn elapsed_since(started_at: &str) -> f64 {
+    use chrono::Local;
+    chrono::NaiveDateTime::parse_from_str(started_at, "%Y-%m-%dT%H:%M:%S")
+        .map(|start| {
+            let now = Local::now().naive_local();
+            (now - start).num_seconds() as f64
+        })
+        .unwrap_or(0.0)
 }
 
 fn read_turn(config: &Config, name: &str, turn_num: Option<usize>, show_input: bool) -> Result<()> {
@@ -451,6 +496,20 @@ fn cmd_init(flags: &Flags) -> Result<()> {
     Ok(())
 }
 
+fn fmt_duration(secs: f64) -> String {
+    let total = secs as u64;
+    let h = total / 3600;
+    let m = (total % 3600) / 60;
+    let s = total % 60;
+    if h > 0 {
+        format!("{}h{}m{}s", h, m, s)
+    } else if m > 0 {
+        format!("{}m{}s", m, s)
+    } else {
+        format!("{}s", s)
+    }
+}
+
 fn print_usage() {
     eprintln!("loom -- multi-agent turn engine");
     eprintln!();
@@ -487,6 +546,7 @@ fn print_usage() {
     eprintln!();
     eprintln!("flags:");
     eprintln!("  --model <model>        override model for this turn");
+    eprintln!("  --use-system <agent>   use another agent's system prompt for this turn");
     eprintln!("  --dir <path>           directory containing loom.yaml");
     eprintln!("  --input, -i            show input instead of output (for read)");
     eprintln!();
