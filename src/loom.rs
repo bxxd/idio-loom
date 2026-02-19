@@ -3,7 +3,7 @@ use std::time::Instant;
 
 use crate::claude;
 use crate::config::Config;
-use crate::meta::{Meta, Turn};
+use crate::meta::{Meta, RunningTurn, Turn};
 use crate::snapshot;
 
 const SCRATCHPAD_FILES: &[(&str, &str)] = &[
@@ -32,10 +32,14 @@ pub fn run_turn(
     source: Option<&str>,
     nudge: Option<&str>,
     model_override: Option<&str>,
+    system_override: Option<&str>,
     stage_name: Option<&str>,
 ) -> Result<()> {
     // Require agent exists
     config.require_agent(speaker)?;
+    if let Some(sys_agent) = system_override {
+        config.require_agent(sys_agent)?;
+    }
 
     let run_dir = Meta::run_dir(config, name);
     std::fs::create_dir_all(&run_dir)?;
@@ -43,6 +47,7 @@ pub fn run_turn(
 
     let mut meta = Meta::read_or_create(config, name, config.snapshots)?;
     meta.name = name.to_string();
+    meta.save(config)?;
     let agent = meta.ensure_agent(speaker).clone();
 
     // Model: override > agent config > config default
@@ -56,18 +61,30 @@ pub fn run_turn(
     }
 
     let turn_n = meta.next_turn_number();
-    print_turn_start(turn_n, stage_name, speaker, source, nudge, &model);
+    print_turn_start(turn_n, stage_name, speaker, source, nudge, &model, system_override);
+
+    // Mark turn as running
+    meta.running = Some(RunningTurn {
+        turn: turn_n,
+        agent: speaker.to_string(),
+        model: model.clone(),
+        started_at: chrono::Local::now().format("%Y-%m-%dT%H:%M:%S").to_string(),
+    });
+    meta.save(config)?;
+
+    // Build system prompt: --use-system agent > speaker agent
+    let scratchpad_dir = run_dir.join("scratchpad");
+    let prompt_agent = system_override.unwrap_or(speaker);
+    let sys_prompt = claude::build_system_prompt(config, config.agent(prompt_agent), &scratchpad_dir);
 
     let t0 = Instant::now();
     let result = if let Some(ref sid) = agent.session_id.as_deref().filter(|s| !s.is_empty()) {
-        claude::claude_resume(sid, &msg, config.timeout)?
+        claude::claude_resume(config, sid, &msg, &sys_prompt, config.timeout)?
     } else {
-        let scratchpad_dir = run_dir.join("scratchpad");
-        let sys_prompt = claude::build_system_prompt(config, config.agent(speaker), &scratchpad_dir);
-        // Save system prompt (only exists on first turn for this agent)
+        // Save system prompt on first turn for this agent
         let sys_file = run_dir.join(format!("{}.system.md", speaker));
         std::fs::write(&sys_file, &sys_prompt)?;
-        claude::claude_new(&msg, &model, &sys_prompt, config.timeout)?
+        claude::claude_new(config, &msg, &model, &sys_prompt, config.timeout)?
     };
     let elapsed = t0.elapsed().as_secs_f64();
 
@@ -82,12 +99,14 @@ pub fn run_turn(
     let last_output = run_dir.join(".last_output");
     std::fs::copy(&turn_file, &last_output)?;
 
+    meta.running = None;
     meta.thread.push(Turn {
         turn: turn_n,
         agent: speaker.to_string(),
         source: source.map(String::from),
         nudge: nudge.map(String::from),
         stage: stage_name.map(String::from),
+        model: Some(model.clone()),
         chars: result.result.len(),
         elapsed_s: (elapsed * 10.0).round() / 10.0,
         cost_usd: result.cost_usd,
@@ -104,7 +123,7 @@ pub fn run_turn(
     Ok(())
 }
 
-fn print_turn_start(turn_n: usize, stage: Option<&str>, speaker: &str, source: Option<&str>, nudge: Option<&str>, model: &str) {
+fn print_turn_start(turn_n: usize, stage: Option<&str>, speaker: &str, source: Option<&str>, nudge: Option<&str>, model: &str, system_override: Option<&str>) {
     eprint!("[turn {}] ", turn_n);
     if let Some(sn) = stage {
         eprint!("[{}] ", sn);
@@ -116,6 +135,9 @@ fn print_turn_start(turn_n: usize, stage: Option<&str>, speaker: &str, source: O
     if let Some(n) = nudge {
         let preview = if n.len() > 60 { &n[..60] } else { n };
         eprint!("\"{}\" ", preview);
+    }
+    if let Some(sys) = system_override {
+        eprint!("[system: {}] ", sys);
     }
     eprintln!("({}) ...", model);
 }

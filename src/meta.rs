@@ -7,6 +7,14 @@ use crate::config::Config;
 
 fn default_true() -> bool { true }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RunningTurn {
+    pub turn: usize,
+    pub agent: String,
+    pub model: String,
+    pub started_at: String,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Meta {
     pub name: String,
@@ -16,6 +24,8 @@ pub struct Meta {
     pub agents: HashMap<String, AgentState>,
     #[serde(default)]
     pub thread: Vec<Turn>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub running: Option<RunningTurn>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -33,6 +43,8 @@ pub struct Turn {
     pub nudge: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stage: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
     pub chars: usize,
     pub elapsed_s: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -46,6 +58,7 @@ impl Meta {
             snapshots,
             agents: HashMap::new(),
             thread: Vec::new(),
+            running: None,
         }
     }
 
