@@ -1,4 +1,4 @@
-use idio_loom::{claude, config, loom, meta, snapshot, thread};
+use idio_loom::{claude, config, meta, snapshot, thread};
 
 use anyhow::{bail, Result};
 use config::Config;
@@ -184,17 +184,16 @@ fn thread_cmd(config: &Config, name: &str, args: &[String], flags: &Flags) -> Re
                 flags.use_system.as_deref(),
             );
 
-            let result = loom::run_turn(
-                config,
-                name,
-                speaker,
-                source.as_deref(),
+            let opts = thread::RunOpts {
+                agent: speaker,
                 nudge,
-                model_override,
-                flags.use_system.as_deref(),
-                None,
-                None,
-            )?;
+                source: source.as_deref(),
+                system: flags.use_system.as_deref(),
+                model: model_override,
+                stage: None,
+                timeout: None,
+            };
+            let result = t.run_opts(&opts)?;
             print_turn_done(result.elapsed_s, result.output.len(), result.cost_usd);
             println!("{}", result.output);
             Ok(())

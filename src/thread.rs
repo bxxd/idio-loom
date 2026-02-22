@@ -5,16 +5,8 @@ use crate::loom::{self, TurnResult};
 use crate::meta::Meta;
 use crate::snapshot;
 
-/// Options for running a turn.
-pub struct RunOpts<'a> {
-    pub agent: &'a str,
-    pub nudge: Option<&'a str>,
-    pub source: Option<&'a str>,
-    pub system: Option<&'a str>,
-    pub model: Option<&'a str>,
-    pub stage: Option<&'a str>,
-    pub timeout: Option<u64>,
-}
+// Re-export RunOpts from loom — consumers import from thread for convenience.
+pub use crate::loom::RunOpts;
 
 /// High-level thread handle. THE public API for loom consumers.
 pub struct Thread<'a> {
@@ -32,32 +24,20 @@ impl<'a> Thread<'a> {
 
     /// Run a turn with minimal args. Returns the turn result.
     pub fn run(&self, agent: &str, nudge: Option<&str>) -> Result<TurnResult> {
-        loom::run_turn(
-            self.config,
-            &self.name,
+        self.run_opts(&RunOpts {
             agent,
-            None,
             nudge,
-            None,
-            None,
-            None,
-            None,
-        )
+            source: None,
+            system: None,
+            model: None,
+            stage: None,
+            timeout: None,
+        })
     }
 
     /// Run a turn with full options.
     pub fn run_opts(&self, opts: &RunOpts) -> Result<TurnResult> {
-        loom::run_turn(
-            self.config,
-            &self.name,
-            opts.agent,
-            opts.source,
-            opts.nudge,
-            opts.model,
-            opts.system,
-            opts.stage,
-            opts.timeout,
-        )
+        loom::run_turn(self.config, &self.name, opts)
     }
 
     /// Number of completed turns.
@@ -100,26 +80,27 @@ impl<'a> Thread<'a> {
         snapshot::rewind(self.config, &self.name, n)
     }
 
-    /// Delete thread entirely.
-    pub fn delete(&self) -> Result<()> {
+    /// Check thread exists, read meta, cleanup sessions. Returns (run_dir, meta).
+    fn prepare_teardown(&self) -> Result<(std::path::PathBuf, Meta)> {
         let run_dir = Meta::run_dir(self.config, &self.name);
         if !run_dir.exists() {
             bail!("thread '{}' not found", self.name);
         }
         let meta = Meta::read(self.config, &self.name)?;
         snapshot::cleanup_sessions(self.config, &meta)?;
+        Ok((run_dir, meta))
+    }
+
+    /// Delete thread entirely.
+    pub fn delete(&self) -> Result<()> {
+        let (run_dir, _meta) = self.prepare_teardown()?;
         std::fs::remove_dir_all(&run_dir)?;
         Ok(())
     }
 
     /// Reset thread (clear turns, keep name).
     pub fn reset(&self) -> Result<()> {
-        let run_dir = Meta::run_dir(self.config, &self.name);
-        if !run_dir.exists() {
-            bail!("thread '{}' not found", self.name);
-        }
-        let meta = Meta::read(self.config, &self.name)?;
-        snapshot::cleanup_sessions(self.config, &meta)?;
+        let (run_dir, meta) = self.prepare_teardown()?;
         let new_meta = Meta::new(&self.name, meta.snapshots);
         for entry in std::fs::read_dir(&run_dir)? {
             let entry = entry?;
