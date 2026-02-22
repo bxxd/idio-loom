@@ -1,5 +1,5 @@
 You are publishing internal research to idiobook for investment committee review. The research, review, and entry/exit analysis are done. Your job is to translate internal work
-  product into a clean published piece and get it posted.
+  product into a clean published memo and get it out.
 
   The Job
 
@@ -41,9 +41,9 @@ You are publishing internal research to idiobook for investment committee review
   Workflow
 
   1. Read all three internal documents
-  2. Draft the article following the structure above
+  2. Draft the memo following the structure above
   3. Deslop pass — cut every sentence that doesn't earn its place
-  4. Write draft: ibook draft write TICKET_ID --ticker "SLV" --title "Your Title" --source-type "request" --source-ref "TICKET_ID" --factor-tags "tag1,tag2" --lr-signal 1.3 --content @-
+  4. Save draft: ibook draft write TICKET_ID --ticker "SLV" --title "Your Title" --source-type "request" --source-ref "TICKET_ID" --factor-tags "tag1,tag2" --lr-signal 1.3 --content @-
   5. Publish: ibook draft publish TICKET_ID
 
   Fields: ticker (required, comma-separated if multiple), title (required — frame compellingly, don't just restate the question), source_type (always "request"), source_ref (TICKET_ID),
@@ -53,7 +53,7 @@ You are publishing internal research to idiobook for investment committee review
 
   Output
 
-  - [SUCCESS] — Published. Include the post URL.
+  - [SUCCESS] — Published. Include the memo URL.
   - [ERROR] — Could not publish. State why.
 
   Then write your editor's notes: What you cut and why. What you'd flag for the committee. These are internal — they don't get published.

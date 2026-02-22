@@ -6,6 +6,14 @@ use crate::config::Config;
 use crate::meta::{Meta, RunningTurn, Turn};
 use crate::snapshot;
 
+/// Result of a completed turn.
+pub struct TurnResult {
+    pub output: String,
+    pub session_id: String,
+    pub elapsed_s: f64,
+    pub cost_usd: Option<f64>,
+}
+
 const SCRATCHPAD_FILES: &[(&str, &str)] = &[
     ("RESEARCH.md", "# Research\n\n"),
     ("EVIDENCE.md", "# Evidence\n\n"),
@@ -25,6 +33,7 @@ fn init_scratchpad(config: &Config, name: &str) -> Result<()> {
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn run_turn(
     config: &Config,
     name: &str,
@@ -34,7 +43,8 @@ pub fn run_turn(
     model_override: Option<&str>,
     system_override: Option<&str>,
     stage_name: Option<&str>,
-) -> Result<()> {
+    timeout_override: Option<u64>,
+) -> Result<TurnResult> {
     // Require agent exists
     config.require_agent(speaker)?;
     if let Some(sys_agent) = system_override {
@@ -61,7 +71,7 @@ pub fn run_turn(
     }
 
     let turn_n = meta.next_turn_number();
-    print_turn_start(turn_n, stage_name, speaker, source, nudge, &model, system_override);
+    let timeout = timeout_override.unwrap_or(config.timeout);
 
     // Mark turn as running
     meta.running = Some(RunningTurn {
@@ -75,16 +85,30 @@ pub fn run_turn(
     // Build system prompt: --use-system agent > speaker agent
     let scratchpad_dir = run_dir.join("scratchpad");
     let prompt_agent = system_override.unwrap_or(speaker);
-    let sys_prompt = claude::build_system_prompt(config, config.agent(prompt_agent), &scratchpad_dir);
+    let sys_prompt =
+        claude::build_system_prompt(config, config.agent(prompt_agent), &scratchpad_dir);
 
     let t0 = Instant::now();
-    let result = if let Some(ref sid) = agent.session_id.as_deref().filter(|s| !s.is_empty()) {
-        claude::claude_resume(config, sid, &msg, &sys_prompt, config.timeout)?
+    let is_resume = agent.session_id.as_deref().filter(|s| !s.is_empty()).is_some();
+    eprintln!(
+        "[loom {}] turn {}: agent={} model={} system={} {} timeout={}s sys_prompt={} chars msg={} chars",
+        crate::version(),
+        turn_n,
+        speaker,
+        model,
+        system_override.unwrap_or("(self)"),
+        if is_resume { format!("RESUME session={}", agent.session_id.as_deref().unwrap()) } else { "NEW".to_string() },
+        timeout,
+        sys_prompt.len(),
+        msg.len(),
+    );
+    let result = if let Some(sid) = agent.session_id.as_deref().filter(|s| !s.is_empty()) {
+        claude::claude_resume(config, sid, &msg, &sys_prompt, timeout)?
     } else {
         // Save system prompt on first turn for this agent
         let sys_file = run_dir.join(format!("{}.system.md", speaker));
         std::fs::write(&sys_file, &sys_prompt)?;
-        claude::claude_new(config, &msg, &model, &sys_prompt, config.timeout)?
+        claude::claude_new(config, &msg, &model, &sys_prompt, timeout)?
     };
     let elapsed = t0.elapsed().as_secs_f64();
 
@@ -113,38 +137,16 @@ pub fn run_turn(
     });
     meta.save(config)?;
 
-    print_turn_done(elapsed, result.result.len(), result.cost_usd);
-    println!("{}", result.result);
-
     if meta.snapshots {
         snapshot::auto_snapshot(config, name, &meta)?;
     }
 
-    Ok(())
-}
-
-fn print_turn_start(turn_n: usize, stage: Option<&str>, speaker: &str, source: Option<&str>, nudge: Option<&str>, model: &str, system_override: Option<&str>) {
-    eprint!("[turn {}] ", turn_n);
-    if let Some(sn) = stage {
-        eprint!("[{}] ", sn);
-    }
-    eprint!("{} ", speaker);
-    if let Some(src) = source {
-        eprint!("hears {} ", src);
-    }
-    if let Some(n) = nudge {
-        let preview = if n.len() > 60 { &n[..60] } else { n };
-        eprint!("\"{}\" ", preview);
-    }
-    if let Some(sys) = system_override {
-        eprint!("[system: {}] ", sys);
-    }
-    eprintln!("({}) ...", model);
-}
-
-fn print_turn_done(elapsed: f64, chars: usize, cost: Option<f64>) {
-    let now = chrono::Local::now().format("%H:%M:%S");
-    eprintln!("  {:.0}s, {} chars, ${:.3} — done at {}", elapsed, chars, cost.unwrap_or(0.0), now);
+    Ok(TurnResult {
+        output: result.result,
+        session_id: result.session_id,
+        elapsed_s: (elapsed * 10.0).round() / 10.0,
+        cost_usd: result.cost_usd,
+    })
 }
 
 pub fn build_message(
@@ -187,7 +189,12 @@ fn get_last_output(config: &Config, name: &str, meta: &Meta, agent: &str) -> Res
         .with_context(|| format!("reading turn output: {}", path.display()))
 }
 
-fn get_full_thread(config: &Config, name: &str, meta: &Meta, exclude: Option<&str>) -> Result<String> {
+fn get_full_thread(
+    config: &Config,
+    name: &str,
+    meta: &Meta,
+    exclude: Option<&str>,
+) -> Result<String> {
     let mut parts = Vec::new();
     for turn in &meta.thread {
         if exclude == Some(turn.agent.as_str()) {

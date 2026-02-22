@@ -3,11 +3,21 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-fn default_model() -> String { "sonnet".into() }
-fn default_timeout() -> u64 { 900 }
-fn default_workshop() -> String { ".".into() }
-fn default_state() -> String { ".loom".into() }
-fn default_true() -> bool { true }
+fn default_model() -> String {
+    "sonnet".into()
+}
+fn default_timeout() -> u64 {
+    900
+}
+fn default_workshop() -> String {
+    ".".into()
+}
+fn default_state() -> String {
+    ".loom".into()
+}
+fn default_true() -> bool {
+    true
+}
 
 /// Root config from loom.yaml
 #[derive(Debug, Clone, Deserialize)]
@@ -24,6 +34,10 @@ pub struct Config {
     pub snapshots: bool,
     #[serde(default)]
     pub system_prompt: String,
+    /// Working directory for claude subprocess (absolute or relative to loom.yaml dir).
+    /// When set, claude runs from this directory (picks up CLAUDE.md, .mcp.json, etc).
+    /// Loom's own state/agents/patterns remain relative to loom.yaml location.
+    pub cwd: Option<String>,
 
     /// Directory containing loom.yaml (set after load, not serialized)
     #[serde(skip)]
@@ -59,10 +73,10 @@ impl Config {
         if !p.exists() {
             bail!("no loom.yaml found in {}", search_dir.display());
         }
-        let text = std::fs::read_to_string(&p)
-            .with_context(|| format!("reading {}", p.display()))?;
-        let mut config: Config = serde_yaml::from_str(&text)
-            .with_context(|| format!("parsing {}", p.display()))?;
+        let text =
+            std::fs::read_to_string(&p).with_context(|| format!("reading {}", p.display()))?;
+        let mut config: Config =
+            serde_yaml::from_str(&text).with_context(|| format!("parsing {}", p.display()))?;
         config.home = search_dir.canonicalize().unwrap_or(search_dir);
         Ok(config)
     }
@@ -71,7 +85,6 @@ impl Config {
     pub fn agents_dir(&self) -> PathBuf {
         self.workshop_dir().join("agents")
     }
-
 
     /// Load all agents from individual YAML files in agents/
     pub fn load_agents(&mut self) -> Result<()> {
@@ -87,7 +100,10 @@ impl Config {
             if !name.ends_with(".yaml") && !name.ends_with(".yml") {
                 continue;
             }
-            let agent_name = name.trim_end_matches(".yaml").trim_end_matches(".yml").to_string();
+            let agent_name = name
+                .trim_end_matches(".yaml")
+                .trim_end_matches(".yml")
+                .to_string();
             let text = std::fs::read_to_string(&path)
                 .with_context(|| format!("reading agent: {}", path.display()))?;
             let agent: Agent = serde_yaml::from_str(&text)
@@ -127,6 +143,25 @@ impl Config {
         self.state_dir().join("runs")
     }
 
+    /// Resolved cwd for claude subprocess. Canonicalized to absolute path.
+    /// Defaults to loom.yaml directory when not set — one path, always explicit.
+    pub fn claude_cwd(&self) -> PathBuf {
+        let resolved = match self.cwd.as_ref() {
+            Some(d) => {
+                let p = Path::new(d);
+                if p.is_absolute() {
+                    p.to_path_buf()
+                } else {
+                    self.home.join(p)
+                }
+            }
+            None => self.home.clone(),
+        };
+        // Canonicalize to get the true absolute path (resolves .., symlinks)
+        // so claude's project hash matches what we expect
+        resolved.canonicalize().unwrap_or(resolved)
+    }
+
     pub fn agent_model(&self, name: &str) -> String {
         self.agents_map
             .get(name)
@@ -139,9 +174,8 @@ impl Config {
     }
 
     pub fn require_agent(&self, name: &str) -> Result<&Agent> {
-        self.agents_map.get(name)
-            .ok_or_else(|| anyhow::anyhow!(
-                "agent '{}' not found — check agents/ directory", name
-            ))
+        self.agents_map
+            .get(name)
+            .ok_or_else(|| anyhow::anyhow!("agent '{}' not found — check agents/ directory", name))
     }
 }

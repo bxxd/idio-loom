@@ -1,7 +1,86 @@
-You have the data, research, and discussion. 
+You have the data, research, and discussion.
 
 Read everything.
 
-Write a draft of a post to the publisher. Be thorough. `ibook draft read`. 
+Write a research memo. This is what lands on the desk of the analyst who manages the money. Do not publish — draft only.
 
-Use ibook to write the draft. But do not publish. 
+## Example of good writing
+
+```
+Good question on the 1990s and at-risk balances. You're half right, and the half you're right about is the important half.
+
+The 1990s: Buffett accumulated 129.7 Moz starting 1997 on the same deficit thesis — production + reclamation running ≈100 Moz/yr below consumption, cumulative deficit reaching 1.2 billion ounces by 2001. The deficit was real. Silver went from $5 to $7 over a decade. Why? Because every ounce of that deficit was absorbed into investment balances — Buffett's vault, not a solar panel. When he liquidated through 2006, the silver came right back.
+
+Today's version is 5x larger. Global ETF holdings ≈718 Moz, LBMA vaults 1.08B oz, plus decades of accumulated coins and bars. The cumulative 820 Moz deficit since 2021 wasn't consumed by industry — it moved from COMEX vaults into ETF vaults. Total at-risk balances: north of 1.5 billion ounces.
+
+You're right that investment-absorbed deficit ≠ industrial consumption. Consumed silver is gone. Investment silver is just waiting.
+
+Where you're wrong — or at least incomplete:
+
+First, the DIRECTION of the buffer matters as much as the stock. Buffett bought during surplus years — inventory was building. Today the buffer is depleting (22 months → 12.3 months coverage). Same mechanism, opposite trajectory.
+
+Second, that 718 Moz in ETFs isn't liquid supply. During the 2011-2015 silver bear market (price fell from $49 to $14), SLV holdings barely moved. ETF holders are sticky. Retail coins and bars are even stickier — last to liquidate. The paper price crashed 35% in Jan-Feb 2026 and physical demand actually INCREASED. Silver Eagles went on allocation, Silver Towne Mint ramped from 200K to 800K oz/week, India reported shortage. Paper and physical are diverging.
+
+Third, COMEX registered inventory — the silver actually available for delivery — is at 82 Moz. That's roughly one month of demand. Lease rates at 8% vs historical <1% confirm genuine physical tightness. The 1.5B oz of at-risk balances EXISTS, but it can't all hit the market at once. Maybe 100-200 Moz could mobilize within 6 months in a sustained bear scenario.
+
+The honest synthesis:
+
+The ex-investment surplus widened to ≈132 Moz in 2025. That's the killer stat. Fabrication demand alone does NOT exceed total supply. The deficit requires investment demand to persist. Strip out ETFs and coins/bars, and the market is in surplus. You're right to flag this.
+
+But the buffer is depleting, physical tightness is real (lease rates, COMEX, India), and byproduct mining means supply CAN'T respond even if price doubles. The best historical analog is uranium 2011-2021: investment overhang suppressed price for a DECADE, then when inventory was finally exhausted, it went $18 to $110.
+
+Silver is on that trajectory. The question is whether we're in 2015 (years of pain ahead) or 2020 (approaching the inflection). The ex-investment surplus says probably closer to 2015. COMEX registered says maybe closer to 2018.
+
+Either way — the memo should have centered this. 'Fifth consecutive deficit' without the ex-investment qualification is half the story.
+```
+
+## LR signal
+
+LR measures how much this memo should shift your prior. Not how good the company is.
+
+- LR = 1.0 → Analysis confirms what market already prices. No information.
+- LR > 1.0 → Bullish divergence. Market is wrong, this is better than priced.
+- LR < 1.0 → Bearish divergence. Market is wrong, this is worse than priced.
+
+Two inputs: LR = f(divergence from market pricing, evidence quality)
+
+1. **Divergence** — How far is your conclusion from what the market implies?
+   - Market prices death + analysis says alive = HIGH divergence
+   - Market prices survival + analysis says survival = LOW divergence (confirms consensus)
+   - Market prices survival + analysis says dead = HIGH divergence (bearish)
+
+2. **Evidence quality** — How strong is the proof?
+   - Primary sources (10-K, 8-K, contracts) = high weight
+   - Framework reasoning only = medium weight
+   - Vibes / narrative = low weight
+
+Scale:
+
+| LR | Meaning | Example |
+|----|---------|---------|
+| 0.2-0.5 | Strong bearish — market badly overpricing | V=1.5 but trading at growth multiple |
+| 0.5-0.8 | Mild bearish — market slightly optimistic | V=2.5, priced for durability it doesn't have |
+| 0.8-1.2 | Consensus — analysis confirms market view | V=3.8 and already priced as survivor |
+| 1.2-2.0 | Mild bullish — market underpricing durability | V=3.5 but priced like it's dying |
+| 2.0-4.0 | Strong bullish — market fundamentally wrong | V=3.8, RSI <20, priced for death |
+| 4.0+ | Extreme — binary mispricing, primary source proof | Regulatory fortress at liquidation multiple |
+
+## ibook CLI
+
+Use `ibook draft write` to create the draft. Use `ibook draft read` to verify it.
+
+```
+# Write a draft (content can be inline or @filepath)
+ibook draft write <id> \
+  --content @/path/to/file.md \
+  --ticker DOCN \
+  --title "Your Title Here" \
+  --source-type request \
+  --factor-tags "tag1,tag2" \
+  --lr-signal 1.2
+
+# Read it back
+ibook draft read <id>
+```
+
+Pick a short slug for <id> (e.g. "docn-thesis", "goss-fda"). Write your markdown content to a file first, then pass it with `--content @filepath`. Always include --ticker and --title.

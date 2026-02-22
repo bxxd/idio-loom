@@ -1,0 +1,2 @@
+model: opus
+system_prompt: "@prompts/worldview.txt"
