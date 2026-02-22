@@ -1,2 +1,5 @@
 /target
 **/.loom/
+python/build/
+python/*.egg-info/
+python/**/__pycache__/

@@ -5,7 +5,9 @@ use std::path::PathBuf;
 
 use crate::config::Config;
 
-fn default_true() -> bool { true }
+fn default_true() -> bool {
+    true
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunningTurn {
@@ -77,8 +79,8 @@ impl Meta {
         }
         let text = std::fs::read_to_string(&path)
             .with_context(|| format!("reading {}", path.display()))?;
-        let meta: Meta = serde_json::from_str(&text)
-            .with_context(|| format!("parsing {}", path.display()))?;
+        let meta: Meta =
+            serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
         Ok(meta)
     }
 
@@ -90,8 +92,8 @@ impl Meta {
         }
         let text = std::fs::read_to_string(&path)
             .with_context(|| format!("reading {}", path.display()))?;
-        let meta: Meta = serde_json::from_str(&text)
-            .with_context(|| format!("parsing {}", path.display()))?;
+        let meta: Meta =
+            serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
         Ok(meta)
     }
 
@@ -106,10 +108,8 @@ impl Meta {
 
     pub fn ensure_agent(&mut self, name: &str) -> &mut AgentState {
         if !self.agents.contains_key(name) {
-            self.agents.insert(
-                name.to_string(),
-                AgentState { session_id: None },
-            );
+            self.agents
+                .insert(name.to_string(), AgentState { session_id: None });
         }
         self.agents.get_mut(name).unwrap()
     }

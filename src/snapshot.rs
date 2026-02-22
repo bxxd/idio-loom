@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 use crate::config::Config;
 use crate::meta::{AgentState, Meta};
 
-fn session_dir() -> PathBuf {
-    let cwd = std::env::current_dir().unwrap_or_default();
+fn session_dir(config: &Config) -> PathBuf {
+    let cwd = config.claude_cwd();
     let slug = cwd.to_string_lossy().replace('/', "-");
     let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
     PathBuf::from(home)
@@ -18,11 +18,12 @@ fn session_dir() -> PathBuf {
 /// Copy session JSONLs for all agents between a sessions dir and claude's project dir.
 /// direction: Save = project → snapshot, Restore = snapshot → project.
 fn sync_sessions(
+    config: &Config,
     agents: &HashMap<String, AgentState>,
     sessions_dir: &Path,
     direction: Direction,
 ) -> Result<()> {
-    let sess_base = session_dir();
+    let sess_base = session_dir(config);
 
     for (agent_name, agent) in agents {
         if let Some(ref sid) = agent.session_id {
@@ -35,20 +36,28 @@ fn sync_sessions(
                 Direction::Save => {
                     if project_jsonl.exists() {
                         std::fs::copy(&project_jsonl, &snap_jsonl)?;
+                        eprintln!("  session saved: {} ({})", agent_name, sid);
+                    } else {
+                        eprintln!("  WARNING: session file missing for {}: {}", agent_name, project_jsonl.display());
                     }
                     if project_sub.exists() && project_sub.is_dir() {
                         copy_dir_recursive(&project_sub, &snap_sub)?;
+                        eprintln!("  subagents saved: {}", agent_name);
                     }
                 }
                 Direction::Restore => {
                     if snap_jsonl.exists() {
                         std::fs::copy(&snap_jsonl, &project_jsonl)?;
+                        eprintln!("  session restored: {} ({})", agent_name, sid);
+                    } else {
+                        eprintln!("  WARNING: no session backup for {} — resume will fail", agent_name);
                     }
                     if snap_sub.exists() && snap_sub.is_dir() {
                         if project_sub.exists() {
                             std::fs::remove_dir_all(&project_sub)?;
                         }
                         copy_dir_recursive(&snap_sub, &project_sub)?;
+                        eprintln!("  subagents restored: {}", agent_name);
                     }
                 }
             }
@@ -57,13 +66,22 @@ fn sync_sessions(
     Ok(())
 }
 
-enum Direction { Save, Restore }
+enum Direction {
+    Save,
+    Restore,
+}
 
 pub fn auto_snapshot(config: &Config, name: &str, meta: &Meta) -> Result<()> {
     let n = meta.thread.len();
-    let last_agent = meta.thread.last().map(|t| t.agent.as_str()).unwrap_or("init");
+    let last_agent = meta
+        .thread
+        .last()
+        .map(|t| t.agent.as_str())
+        .unwrap_or("init");
     let run_dir = Meta::run_dir(config, name);
-    let snap = run_dir.join("snapshots").join(format!("snap-{}-{}", n, last_agent));
+    let snap = run_dir
+        .join("snapshots")
+        .join(format!("snap-{}-{}", n, last_agent));
 
     if snap.exists() {
         std::fs::remove_dir_all(&snap)?;
@@ -76,7 +94,7 @@ pub fn auto_snapshot(config: &Config, name: &str, meta: &Meta) -> Result<()> {
     // Copy session JSONLs
     let sessions_dir = snap.join("sessions");
     std::fs::create_dir_all(&sessions_dir)?;
-    sync_sessions(&meta.agents, &sessions_dir, Direction::Save)?;
+    sync_sessions(config, &meta.agents, &sessions_dir, Direction::Save)?;
 
     eprintln!("  snapshot: snap-{}-{}", n, last_agent);
     Ok(())
@@ -118,7 +136,7 @@ pub fn rewind(config: &Config, name: &str, snap_n: &str) -> Result<()> {
     let sessions = snap.join("sessions");
     if sessions.exists() {
         let meta = Meta::read(config, name)?;
-        sync_sessions(&meta.agents, &sessions, Direction::Restore)?;
+        sync_sessions(config, &meta.agents, &sessions, Direction::Restore)?;
     }
 
     eprintln!("rewound to {}", snap.file_name().unwrap().to_string_lossy());
@@ -142,8 +160,8 @@ fn find_snapshot(snap_dir: &Path, target: &str) -> Result<PathBuf> {
 }
 
 /// Remove session JSONLs from claude's project dir for all agents in this run
-pub fn cleanup_sessions(meta: &Meta) -> Result<()> {
-    let sess_base = session_dir();
+pub fn cleanup_sessions(config: &Config, meta: &Meta) -> Result<()> {
+    let sess_base = session_dir(config);
     for agent in meta.agents.values() {
         if let Some(ref sid) = agent.session_id {
             let jsonl = sess_base.join(format!("{}.jsonl", sid));
