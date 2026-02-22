@@ -6,6 +6,17 @@ use crate::config::Config;
 use crate::meta::{Meta, RunningTurn, Turn};
 use crate::snapshot;
 
+/// Options for running a turn.
+pub struct RunOpts<'a> {
+    pub agent: &'a str,
+    pub nudge: Option<&'a str>,
+    pub source: Option<&'a str>,
+    pub system: Option<&'a str>,
+    pub model: Option<&'a str>,
+    pub stage: Option<&'a str>,
+    pub timeout: Option<u64>,
+}
+
 /// Result of a completed turn.
 pub struct TurnResult {
     pub output: String,
@@ -33,18 +44,12 @@ fn init_scratchpad(config: &Config, name: &str) -> Result<()> {
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
-pub fn run_turn(
-    config: &Config,
-    name: &str,
-    speaker: &str,
-    source: Option<&str>,
-    nudge: Option<&str>,
-    model_override: Option<&str>,
-    system_override: Option<&str>,
-    stage_name: Option<&str>,
-    timeout_override: Option<u64>,
-) -> Result<TurnResult> {
+pub fn run_turn(config: &Config, name: &str, opts: &RunOpts) -> Result<TurnResult> {
+    let speaker = opts.agent;
+    let source = opts.source;
+    let nudge = opts.nudge;
+    let system_override = opts.system;
+
     // Require agent exists
     config.require_agent(speaker)?;
     if let Some(sys_agent) = system_override {
@@ -61,7 +66,8 @@ pub fn run_turn(
     let agent = meta.ensure_agent(speaker).clone();
 
     // Model: override > agent config > config default
-    let model = model_override
+    let model = opts
+        .model
         .map(String::from)
         .unwrap_or_else(|| config.agent_model(speaker));
 
@@ -71,7 +77,7 @@ pub fn run_turn(
     }
 
     let turn_n = meta.next_turn_number();
-    let timeout = timeout_override.unwrap_or(config.timeout);
+    let timeout = opts.timeout.unwrap_or(config.timeout);
 
     // Mark turn as running
     meta.running = Some(RunningTurn {
@@ -89,7 +95,7 @@ pub fn run_turn(
         claude::build_system_prompt(config, config.agent(prompt_agent), &scratchpad_dir);
 
     let t0 = Instant::now();
-    let is_resume = agent.session_id.as_deref().filter(|s| !s.is_empty()).is_some();
+    let active_session = agent.session_id.as_deref().filter(|s| !s.is_empty());
     eprintln!(
         "[loom {}] turn {}: agent={} model={} system={} {} timeout={}s sys_prompt={} chars msg={} chars",
         crate::version(),
@@ -97,12 +103,12 @@ pub fn run_turn(
         speaker,
         model,
         system_override.unwrap_or("(self)"),
-        if is_resume { format!("RESUME session={}", agent.session_id.as_deref().unwrap()) } else { "NEW".to_string() },
+        if let Some(sid) = active_session { format!("RESUME session={}", sid) } else { "NEW".to_string() },
         timeout,
         sys_prompt.len(),
         msg.len(),
     );
-    let result = if let Some(sid) = agent.session_id.as_deref().filter(|s| !s.is_empty()) {
+    let result = if let Some(sid) = active_session {
         claude::claude_resume(config, sid, &msg, &sys_prompt, timeout)?
     } else {
         // Save system prompt on first turn for this agent
@@ -129,7 +135,7 @@ pub fn run_turn(
         agent: speaker.to_string(),
         source: source.map(String::from),
         nudge: nudge.map(String::from),
-        stage: stage_name.map(String::from),
+        stage: opts.stage.map(String::from),
         model: Some(model.clone()),
         chars: result.result.len(),
         elapsed_s: (elapsed * 10.0).round() / 10.0,

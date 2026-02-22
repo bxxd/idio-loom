@@ -15,7 +15,7 @@ fn default_workshop() -> String {
 fn default_state() -> String {
     ".loom".into()
 }
-fn default_true() -> bool {
+pub(crate) fn default_true() -> bool {
     true
 }
 
@@ -81,6 +81,16 @@ impl Config {
         Ok(config)
     }
 
+    /// Resolve a path: absolute stays as-is, relative joins to home.
+    fn resolve_path(&self, p: &str) -> PathBuf {
+        let path = Path::new(p);
+        if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            self.home.join(path)
+        }
+    }
+
     /// Agents directory
     pub fn agents_dir(&self) -> PathBuf {
         self.workshop_dir().join("agents")
@@ -115,12 +125,7 @@ impl Config {
 
     /// Workshop directory — where content lives (agents, patterns)
     pub fn workshop_dir(&self) -> PathBuf {
-        let p = Path::new(&self.workshop);
-        if p.is_absolute() {
-            p.to_path_buf()
-        } else {
-            self.home.join(p)
-        }
+        self.resolve_path(&self.workshop)
     }
 
     /// Patterns directory
@@ -130,12 +135,7 @@ impl Config {
 
     /// State directory — resolved from `state` field (absolute or relative to home)
     pub fn state_dir(&self) -> PathBuf {
-        let p = Path::new(&self.state);
-        if p.is_absolute() {
-            p.to_path_buf()
-        } else {
-            self.home.join(p)
-        }
+        self.resolve_path(&self.state)
     }
 
     /// Runs directory — {state}/runs/
@@ -147,14 +147,7 @@ impl Config {
     /// Defaults to loom.yaml directory when not set — one path, always explicit.
     pub fn claude_cwd(&self) -> PathBuf {
         let resolved = match self.cwd.as_ref() {
-            Some(d) => {
-                let p = Path::new(d);
-                if p.is_absolute() {
-                    p.to_path_buf()
-                } else {
-                    self.home.join(p)
-                }
-            }
+            Some(d) => self.resolve_path(d),
             None => self.home.clone(),
         };
         // Canonicalize to get the true absolute path (resolves .., symlinks)
