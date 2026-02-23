@@ -1,11 +1,20 @@
 #!/bin/bash
 # deep-dive.sh — research with iterative critique loop
-# Usage: ./patterns/deep-dive.sh <thread-name> <intake> [model]
+# Usage: loom p deep-dive run <intake> [model]
 set -e
 
-NAME="${1:?usage: deep-dive.sh <name> <intake> [model]}"
-INTAKE="${2:?usage: deep-dive.sh <name> <intake> [model]}"
-MODEL="${3:-}"
+INTAKE="${1:?usage: deep-dive.sh <intake> [model]}"
+MODEL="${2:-}"
+PATTERN="deep-dive"
+
+# Generate thread name with auto-increment
+i=1
+while loom t "r-${PATTERN}-${i}" show &>/dev/null; do
+  i=$((i + 1))
+done
+NAME="r-${PATTERN}-${i}"
+
+echo "thread: $NAME"
 
 do_turn() {
   if [ -n "$MODEL" ]; then
@@ -36,7 +45,7 @@ for i in 1 2 3; do
 done
 
 # Write and edit
-do_turn writer hears all "write the post"
+do_turn writer hears all "write the memo"
 do_turn editor hears writer
 
-echo "done: loom t $NAME show"
+loom t "$NAME" show

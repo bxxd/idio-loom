@@ -1,208 +1,226 @@
-# loom
+# Loom
 
-Multi-agent research CLI. Named threads of agent conversations via `claude --resume`, routing messages between agents while preserving session context.
+Multi-agent thread engine. Named threads of agent conversations via `claude --resume`, routing messages between agents while preserving session context.
 
 ## Install
 
 ```bash
-cargo build --release
-cp target/release/loom ~/.local/bin/
+make build    # cargo build --release
+make install  # copies to ~/.local/bin/loom
 ```
+
+Python: `pip install -e /path/to/loom/python`
+Rust: `idio-loom = { path = "../loom" }` in Cargo.toml
 
 ## Quick Start
 
 ```bash
-# Initialize a workspace
-loom init
+loom init                                              # scaffold workspace
+loom agents                                            # list agents
+loom patterns                                          # list patterns
 
-# Or run from an existing workspace with loom.yaml
-cd /your/workspace
+# Pattern mode
+loom p idio3 run "DOCN: met coal"
 
-# See what's available
-loom agents                              # list agents
-loom patterns                            # list patterns
-
-# Pattern mode — structured multi-stage workflow
-loom t DOCN-v1 start deep-dive.yaml
-loom t DOCN-v1 next
-loom t DOCN-v1 next
-loom t DOCN-v1 show
-
-# Pattern mode — run all stages at once
-loom t DOCN-v2 run deep-dive.yaml
-
-# Manual mode — ad hoc turns
+# Manual mode
 loom t TEST-1 do axe "investigate DOCN"
-loom t TEST-1 do bobby hears axe "what's wrong with this thesis?"
+loom t TEST-1 do bobby hears axe "attack this thesis"
 loom t TEST-1 do axe hears all
-
-# Inspect
-loom list
 loom t TEST-1 show
-loom t TEST-1 read
 ```
 
-## Workspace Structure
+## CLI
 
 ```
-workshop/                    # content (deployable, git-tracked)
-├── agents/
-│   ├── axe.yaml             # one file per agent
+loom
+├── init [path] [--force]
+├── list (ls)
+├── agents [show <name>]
+├── patterns (p) [<name> show | <name> run [args...]]
+└── thread (t) <name>
+    ├── do <agent> [hears <source>] ["nudge"]
+    ├── show (default)
+    ├── read [turn] [--input]
+    ├── snapshot
+    ├── rewind <N>
+    ├── reset (clear)
+    └── delete (rm)
+```
+
+**Flags**: `--model <model>`, `--use-system <agent>`, `--dir <path>`, `--input`/`-i`, `--force`/`-f`
+
+**Env**: `LOOM_MODEL` — model override for scripts
+
+**Aliases**: `t`=thread, `p`=patterns, `ls`=list, `rm`=delete, `clear`=reset
+
+## Workspace
+
+```
+workspace/
+├── loom.yaml                          # config
+├── .mcp.json                          # MCP config for claude (optional)
+├── agents/                            # in workshop dir
+│   ├── axe.yaml
 │   ├── bobby.yaml
 │   └── prompts/
-│       ├── researcher-v8.txt
 │       └── writer.txt
-└── patterns/
-    └── deep-dive.yaml
-
-loom.yaml                    # runtime config (per-tenant)
-.loom/                       # state (per-tenant, gitignored)
-└── runs/
-    └── DOCN-v1/
-        ├── meta.json
-        ├── scratchpad/
-        ├── turn-0-axe.md
-        └── snapshots/
+├── patterns/                          # in workshop dir
+│   └── idio3.sh
+└── .loom/                             # state dir
+    └── runs/
+        └── <thread>/
+            ├── meta.json
+            ├── .last_output
+            ├── scratchpad/{RESEARCH,EVIDENCE,THESES,NOTES}.md
+            ├── {agent}.system.md      # system prompt (first turn)
+            ├── turn-{N}-{agent}.md    # output
+            ├── turn-{N}-{agent}.input.md
+            └── snapshots/{N}/
 ```
 
-### Config — loom.yaml
+### loom.yaml
 
 ```yaml
-model: sonnet                # default model
-timeout: 900                 # seconds
-workshop: .                  # path to content (absolute or relative)
-state: .loom                 # path to state dir (absolute or relative)
-pattern: deep-dive.yaml      # default pattern
-snapshots: true
-
-system_prompt: |
-  Do NOT use run_in_background: true when spawning sub-agents.
+model: sonnet              # default model
+timeout: 900               # turn timeout in seconds
+workshop: .                # path to agents/ and patterns/ (absolute or relative to loom.yaml dir)
+state: .loom               # path to state dir (absolute or relative to loom.yaml dir)
+snapshots: true            # auto-snapshot after each turn
+cwd: /some/path            # claude subprocess working directory (optional, picks up CLAUDE.md/.mcp.json)
+system_prompt: |           # global system prompt appended to all agents (optional)
+  Extra instructions here.
 ```
 
-### Agents — workshop/agents/
+### Agents — agents/*.yaml
 
-Each agent is its own YAML file. All `.yaml` files in `agents/` are loaded automatically.
+Each file = one agent. All loaded automatically.
 
 ```yaml
-# agents/axe.yaml
-model: opus
-system_prompt: |
-  You are a primary source researcher. Extract facts from filings
-  and transcripts. Form a thesis. Be opinionated.
-system_file: researcher-v8.txt   # loaded from agents/prompts/
+model: opus                                          # model override (optional)
+system_prompt: "@prompts/writer.txt"                 # from file, inline text, or mixed
 ```
 
-### Patterns — workshop/patterns/
+**Model resolution**: `--model` flag > `LOOM_MODEL` env > agent YAML > loom.yaml default
 
-Patterns define multi-stage workflows. Each stage references an agent by name.
+**@file resolution**: agent prompts resolve from `agents/prompts/`, pattern nudges from `patterns/`
 
-```yaml
-# patterns/deep-dive.yaml
-name: deep-dive
-stages:
-  - name: research
-    agent: axe
-    nudge: "investigate the topic — pull filings, transcripts, data."
+### Patterns — patterns/*.sh
 
-  - name: critique
-    agent: bobby
-    source: axe
-    nudge: "attack this thesis. find gaps, check math."
-
-  - name: rebut
-    agent: axe
-    source: bobby
-
-  - name: write
-    agent: writer
-    source: all
-    nudge: "write the post"
-
-  - name: edit
-    agent: editor
-    source: writer
-```
-
-### @file references
-
-Nudges and system prompts can reference files with `@path`:
-
-```yaml
-nudge: "@critique-checklist.txt"           # whole value from file
-nudge: "review this. @checklist.txt"       # inline inclusion
-```
-
-Agent `@` refs resolve from `agents/prompts/`. Pattern `@` refs resolve from `patterns/`.
-
-## Commands
-
-```
-setup:
-  loom init [path]                                         # scaffold workspace
-
-agents:
-  loom agents                                              # list agents
-  loom agents show <name>                                  # show agent details
-
-patterns:
-  loom patterns                                            # list available patterns
-  loom patterns show [name]                                # show pattern (default if no name)
-  loom patterns set <name>                                 # set default pattern
-
-threads:
-  loom list                                                # list all threads
-
-pattern mode:
-  loom thread <name> start [pattern.yaml]                  # init thread with pattern
-  loom thread <name> run [pattern.yaml]                    # start + run all stages
-  loom thread <name> next                                  # run next pattern stage
-
-manual mode:
-  loom thread <name> do <agent> ["nudge"]                  # agent speaks
-  loom thread <name> do <agent> hears <other> ["nudge"]    # agent hears another
-  loom thread <name> do <agent> hears all ["nudge"]        # agent hears full thread
-
-inspection:
-  loom thread <name> show                                  # thread summary
-  loom thread <name> read [turn]                           # print turn output
-
-snapshots:
-  loom thread <name> snapshot                              # manual snapshot
-  loom thread <name> rewind <N>                            # restore to after turn N
-
-lifecycle:
-  loom thread <name> reset                                 # wipe turns, keep config
-  loom thread <name> delete                                # remove thread entirely
-
-shortcuts: t = thread, ls = list, rm = delete, clear = reset
-
-flags:
-  --model <model>        override model for this turn
-  --dir <path>           directory containing loom.yaml
-  --snapshot             enable snapshots
-  --no-snapshot          disable snapshots
-  --force, -f            overwrite existing thread
-```
-
-## How It Works
-
-1. Each agent gets a `claude -p` session with `--append-system-prompt` (global + agent-specific + scratchpad path)
-2. Subsequent turns use `claude -p --resume <session_id>` to maintain full context
-3. `hears <agent>` routes that agent's last output as input
-4. `hears all` concatenates the full thread (excluding self, including nudges)
-5. Snapshots capture meta + scratchpad + turn files + claude session JSONLs
-6. Rewind restores all of the above, rolling back agent memory
-
-## Deployment
-
-Content (workshop) deploys separately from config+state:
+Bash scripts that orchestrate multi-turn threads. `loom p <name> run` invokes via bash, passing args through. No `.sh` extension needed.
 
 ```bash
-# Source (git repo, iterate here)
-idio-loom/workshop/
+#!/bin/bash
+INTAKE="${1:?usage: example.sh <intake> [model]}"
+MODEL="${2:-sonnet}"
+NAME="example-$(date +%s)"
 
-# Tenant config + state (per environment)
-/var/idio-shared/dev/ibook/
-├── loom.yaml                 # workshop: /var/idio-loom/dev
-└── .loom/runs/               # state stays local
+loom t "$NAME" do axe "$INTAKE" --model "$MODEL"
+loom t "$NAME" do bobby hears axe "attack this thesis" --model "$MODEL"
+loom t "$NAME" do axe hears bobby --model "$MODEL"
+loom t "$NAME" do axe "write it up" --use-system writer --model "$MODEL"
+loom t "$NAME" show
+```
+
+## Concepts
+
+**Message routing**: `do <agent> "nudge"` sends nudge as input. `hears <other>` routes that agent's last output. `hears all` concatenates full thread excluding self (includes nudges as `[user → agent]: text`).
+
+**Sessions**: Each agent gets its own claude session. First turn creates it, subsequent turns resume. Full conversation history maintained automatically.
+
+**Scratchpad**: Shared `scratchpad/` directory per thread with `RESEARCH.md`, `EVIDENCE.md`, `THESES.md`, `NOTES.md`. Path injected into system prompts.
+
+**--use-system**: `--use-system writer` makes the current agent use writer's system prompt for one turn while keeping its own session context.
+
+**Snapshots**: Capture full state including claude session JSONLs. `rewind <N>` restores to after turn N, rolling back agent memory.
+
+**Turn tracing**: Each turn saves `turn-{N}-{agent}.md` (output) and `turn-{N}-{agent}.input.md` (input). First turn per agent saves `{agent}.system.md`. Read with `loom t <name> read [turn] [--input]`.
+
+## Python API
+
+```python
+from idio_loom import Loom, LoomTimeout, LoomError
+
+loom = Loom(workspace="/var/idio-shared/dev/ibook")
+t = loom.thread("DOCN-v1", model="opus", timeout=1200)
+
+output = t.do("axe", "investigate DOCN: met coal thesis")
+output = t.do("bobby", hears="axe", nudge="attack this thesis")
+output = t.do("axe", hears="bobby")
+output = t.do("axe", "write a draft", system="writer")
+
+print(t.step)          # completed turns (int)
+print(t.last_output)   # last turn content
+print(t.show())        # thread summary
+
+t.rewind(2)
+t.reset()
+t.delete()
+```
+
+`t.do()` params: `agent`, `nudge=`, `hears=`, `system=`, `model=`, `timeout=`
+
+Wraps CLI via subprocess. Requires `loom` binary on PATH.
+
+## Rust Library API
+
+```rust
+use idio_loom::config::Config;
+use idio_loom::thread::{Thread, RunOpts};
+
+let config = Config::load(Some("/path/to/workspace"))?;
+let t = Thread::new(&config, "my-thread");
+
+// Simple
+let result = t.run("axe", Some("investigate DOCN"))?;
+
+// Full options
+let result = t.run_opts(&RunOpts {
+    agent: "axe",
+    nudge: Some("analyze this"),
+    source: Some("bobby"),       // or "all"
+    model: Some("opus"),
+    system: None,                // --use-system
+    stage: Some("research"),
+    timeout: Some(1800),
+})?;
+// result: output, session_id, elapsed_s, cost_usd
+
+t.step()?;                       // turn count
+t.last_output()?;                // last turn content
+t.show()?;                       // thread summary
+t.read_turn(Some(2), false)?;   // turn 2 output
+t.read_turn(None, true)?;       // latest input
+t.rewind("3")?;
+t.reset()?;
+t.delete()?;
+```
+
+## Examples
+
+```bash
+# Research session
+loom t DOCN-1 do axe "DOCN: met coal. pull 10-K, latest transcript, price data"
+loom t DOCN-1 do axe "what are the key forward factors?"
+loom t DOCN-1 do bobby hears axe "attack this thesis"
+loom t DOCN-1 do axe hears bobby
+loom t DOCN-1 do axe "write it up" --use-system writer
+loom t DOCN-1 show
+
+# Patterns
+loom p idio3 run "AAPL: earnings analysis" opus
+loom p deep-dive run "SLB: offshore drilling"
+
+# Quick test
+loom t TEST do axe "what is 2+2" --model haiku
+loom t TEST do bobby hears axe --model haiku
+loom t TEST rm
+
+# Rewind
+loom t DOCN-1 rewind 3
+loom t DOCN-1 do axe "try a different angle"
+
+# Debug
+loom t DOCN-1 read 0 --input    # what was sent
+loom t DOCN-1 read 0            # what came back
+loom agents show axe             # system prompt
 ```

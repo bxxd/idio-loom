@@ -1,13 +1,10 @@
-mod claude;
-mod config;
-mod loom;
-mod meta;
-mod snapshot;
+use idio_loom::{claude, config, meta, snapshot, thread};
 
-use anyhow::{bail, Context, Result};
-use std::path::Path;
+use anyhow::{bail, Result};
 use config::Config;
 use meta::Meta;
+use std::path::Path;
+use thread::Thread;
 
 struct Flags {
     model: Option<String>,
@@ -62,12 +59,29 @@ fn extract_flags(args: Vec<String>) -> Flags {
                     i += 1;
                 }
             }
-            "--force" | "-f" => { force = true; i += 1; }
-            "--input" | "-i" => { input = true; i += 1; }
-            _ => { positional.push(args[i].clone()); i += 1; }
+            "--force" | "-f" => {
+                force = true;
+                i += 1;
+            }
+            "--input" | "-i" => {
+                input = true;
+                i += 1;
+            }
+            _ => {
+                positional.push(args[i].clone());
+                i += 1;
+            }
         }
     }
-    Flags { model, use_system, nudge, dir, force, input, positional }
+    Flags {
+        model,
+        use_system,
+        nudge,
+        dir,
+        force,
+        input,
+        positional,
+    }
 }
 
 fn main() -> Result<()> {
@@ -86,6 +100,11 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
+    if matches!(args[0].as_str(), "version" | "--version" | "-V") {
+        println!("loom {}", idio_loom::version());
+        return Ok(());
+    }
+
     if args[0] == "init" {
         return cmd_init(&flags);
     }
@@ -93,7 +112,10 @@ fn main() -> Result<()> {
     let config = Config::load(flags.dir.as_deref())?;
 
     match args[0].as_str() {
-        "list" | "ls" => list_threads(&config),
+        "list" | "ls" => {
+            println!("{}", thread::list_threads(&config)?);
+            Ok(())
+        }
         "agents" => {
             let sub = args.get(1).map(|s| s.as_str());
             let sub = match sub {
@@ -108,7 +130,8 @@ fn main() -> Result<()> {
                 bail!("usage: loom thread <name> [command]");
             }
             if args[1] == "list" || args[1] == "ls" {
-                return list_threads(&config);
+                println!("{}", thread::list_threads(&config)?);
+                return Ok(());
             }
             let name = &args[1];
             let rest = &args[2..];
@@ -121,8 +144,11 @@ fn main() -> Result<()> {
 }
 
 fn thread_cmd(config: &Config, name: &str, args: &[String], flags: &Flags) -> Result<()> {
+    let t = Thread::new(config, name);
+
     if args.is_empty() {
-        return show(config, name);
+        println!("{}", t.show()?);
+        return Ok(());
     }
 
     let cmd = &args[0];
@@ -139,28 +165,72 @@ fn thread_cmd(config: &Config, name: &str, args: &[String], flags: &Flags) -> Re
 
             // LOOM_MODEL env var as fallback for model override (for scripts)
             let env_model = std::env::var("LOOM_MODEL").ok();
-            let model_override = flags.model.as_deref()
+            let model_override = flags
+                .model
+                .as_deref()
                 .or(env_model.as_deref())
                 .filter(|s| !s.is_empty());
 
-            loom::run_turn(config, name, speaker, source.as_deref(), nudge, model_override, flags.use_system.as_deref(), None)
+            let model_display = model_override
+                .map(String::from)
+                .unwrap_or_else(|| config.agent_model(speaker));
+            print_turn_start(
+                Meta::read_or_create(config, name, config.snapshots)?.next_turn_number(),
+                None,
+                speaker,
+                source.as_deref(),
+                nudge,
+                &model_display,
+                flags.use_system.as_deref(),
+            );
+
+            let opts = thread::RunOpts {
+                agent: speaker,
+                nudge,
+                source: source.as_deref(),
+                system: flags.use_system.as_deref(),
+                model: model_override,
+                stage: None,
+                timeout: None,
+            };
+            let result = t.run_opts(&opts)?;
+            print_turn_done(result.elapsed_s, result.output.len(), result.cost_usd);
+            println!("{}", result.output);
+            Ok(())
         }
 
-        "show" => show(config, name),
+        "show" => {
+            println!("{}", t.show()?);
+            Ok(())
+        }
         "read" => {
             let turn_num = args.get(1).and_then(|s| s.parse().ok());
-            read_turn(config, name, turn_num, flags.input)
+            let content = t.read_turn(turn_num, flags.input)?;
+            println!("{}", content);
+            Ok(())
         }
         "snapshot" => {
             let meta = Meta::read(config, name)?;
             snapshot::auto_snapshot(config, name, &meta)
         }
         "rewind" => {
-            let n = args.get(1).ok_or_else(|| anyhow::anyhow!("usage: loom t <name> rewind <N>"))?;
-            snapshot::rewind(config, name, n)
+            let n = args
+                .get(1)
+                .ok_or_else(|| anyhow::anyhow!("usage: loom t <name> rewind <N>"))?;
+            t.rewind(n)?;
+            eprintln!("rewound {}", name);
+            Ok(())
         }
-        "delete" | "rm" => delete_thread(config, name),
-        "reset" | "clear" => reset_thread(config, name),
+        "delete" | "rm" => {
+            t.delete()?;
+            eprintln!("deleted {}", name);
+            Ok(())
+        }
+        "reset" | "clear" => {
+            t.reset()?;
+            eprintln!("reset {}", name);
+            Ok(())
+        }
 
         _ => {
             bail!("unknown thread command '{}' -- try `loom help`", cmd);
@@ -178,186 +248,21 @@ fn parse_turn_args(args: &[String]) -> Result<(Option<String>, Option<String>)> 
             bail!("usage: loom t <name> <agent> hears <source> [nudge]");
         }
         let source = args[1].clone();
-        let nudge = if args.len() > 2 { Some(args[2..].join(" ")) } else { None };
+        let nudge = if args.len() > 2 {
+            Some(args[2..].join(" "))
+        } else {
+            None
+        };
         Ok((Some(source), nudge))
     } else {
         Ok((None, Some(args.join(" "))))
     }
 }
 
-fn list_threads(config: &Config) -> Result<()> {
-    let runs_dir = config.runs_dir();
-    if !runs_dir.exists() {
-        eprintln!("no threads yet");
-        return Ok(());
-    }
-
-    let mut entries: Vec<_> = std::fs::read_dir(&runs_dir)?
-        .filter_map(|e| e.ok())
-        .filter(|e| e.path().is_dir())
-        .collect();
-
-    if entries.is_empty() {
-        eprintln!("no threads yet");
-        return Ok(());
-    }
-
-    entries.sort_by(|a, b| {
-        let ta = a.metadata().and_then(|m| m.modified()).ok();
-        let tb = b.metadata().and_then(|m| m.modified()).ok();
-        tb.cmp(&ta)
-    });
-
-    for entry in &entries {
-        let name = entry.file_name().to_string_lossy().to_string();
-        match Meta::read(config, &name) {
-            Ok(meta) => {
-                let agents: Vec<_> = meta.agents.keys().map(|s| s.as_str()).collect();
-                let cost: f64 = meta.thread.iter().filter_map(|t| t.cost_usd).sum();
-                let elapsed: f64 = meta.thread.iter().map(|t| t.elapsed_s).sum();
-                let running = if let Some(ref r) = meta.running {
-                    let r_elapsed = elapsed_since(&r.started_at);
-                    format!(" ▶ {} {} ({})", r.agent, r.model, fmt_duration(r_elapsed))
-                } else {
-                    String::new()
-                };
-                if meta.thread.is_empty() && meta.running.is_some() {
-                    println!("  {} --{}", name, running);
-                } else if meta.thread.is_empty() {
-                    println!("  {} -- (no turns)", name);
-                } else {
-                    println!("  {} -- {} turns, {} {}, ${:.3}{}",
-                        name, meta.thread.len(),
-                        agents.join(", "), fmt_duration(elapsed), cost, running);
-                }
-            }
-            Err(_) => {
-                println!("  {} -- (corrupt meta)", name);
-            }
-        }
-    }
-    Ok(())
-}
-
-fn show(config: &Config, name: &str) -> Result<()> {
-    let meta = Meta::read(config, name)?;
-    if meta.thread.is_empty() && meta.running.is_none() {
-        println!("{} (no turns yet)", name);
-        return Ok(());
-    }
-    let agents: Vec<_> = meta.agents.keys().collect();
-
-    println!("{} ({} turns, {} agents: {})",
-        name, meta.thread.len(), agents.len(),
-        agents.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", "));
-
-    let mut total_cost = 0.0;
-    let mut total_elapsed = 0.0;
-    for turn in &meta.thread {
-        let stage = turn.stage.as_ref().map(|s| format!(" ({})", s)).unwrap_or_default();
-        let source = turn.source.as_ref().map(|s| format!(" < {}", s)).unwrap_or_default();
-        let nudge = turn.nudge.as_ref().map(|n| {
-            let preview = if n.len() > 40 { &n[..40] } else { n };
-            format!(" \"{}\"", preview)
-        }).unwrap_or_default();
-        let cost = turn.cost_usd.map(|c| format!(" ${:.3}", c)).unwrap_or_default();
-        let model = turn.model.as_ref().map(|m| format!(" {}", m)).unwrap_or_default();
-
-        println!("  [{}] {}{}{}{}{} ({}, {} chars{})",
-            turn.turn, turn.agent, model, stage, source, nudge, fmt_duration(turn.elapsed_s), turn.chars, cost);
-
-        total_cost += turn.cost_usd.unwrap_or(0.0);
-        total_elapsed += turn.elapsed_s;
-    }
-
-    // Show currently running turn
-    if let Some(ref r) = meta.running {
-        let elapsed = elapsed_since(&r.started_at);
-        println!("  [{}] {} {} ▶ running ({})",
-            r.turn, r.agent, r.model, fmt_duration(elapsed));
-    }
-
-    if !meta.thread.is_empty() {
-        println!("  ────────────────────────");
-        println!("  total: {}, ${:.3}", fmt_duration(total_elapsed), total_cost);
-    }
-
-    Ok(())
-}
-
-fn elapsed_since(started_at: &str) -> f64 {
-    use chrono::Local;
-    chrono::NaiveDateTime::parse_from_str(started_at, "%Y-%m-%dT%H:%M:%S")
-        .map(|start| {
-            let now = Local::now().naive_local();
-            (now - start).num_seconds() as f64
-        })
-        .unwrap_or(0.0)
-}
-
-fn read_turn(config: &Config, name: &str, turn_num: Option<usize>, show_input: bool) -> Result<()> {
-    let meta = Meta::read(config, name)?;
-
-    let turn = match turn_num {
-        Some(n) => meta.thread.iter().find(|t| t.turn == n)
-            .ok_or_else(|| anyhow::anyhow!("turn {} not found", n))?,
-        None => meta.thread.last()
-            .ok_or_else(|| anyhow::anyhow!("no turns yet"))?,
-    };
-
-    let path = if show_input {
-        Meta::run_dir(config, name).join(format!("turn-{}-{}.input.md", turn.turn, turn.agent))
-    } else {
-        Meta::turn_file(config, name, turn.turn, &turn.agent)
-    };
-    let content = std::fs::read_to_string(&path)
-        .with_context(|| format!("reading {}", path.display()))?;
-    println!("{}", content);
-    Ok(())
-}
-
-fn delete_thread(config: &Config, name: &str) -> Result<()> {
-    let run_dir = Meta::run_dir(config, name);
-    if !run_dir.exists() {
-        bail!("thread '{}' not found", name);
-    }
-    let meta = Meta::read(config, name)?;
-    snapshot::cleanup_sessions(&meta)?;
-    std::fs::remove_dir_all(&run_dir)?;
-    eprintln!("deleted {}", name);
-    Ok(())
-}
-
-fn reset_thread(config: &Config, name: &str) -> Result<()> {
-    let run_dir = Meta::run_dir(config, name);
-    if !run_dir.exists() {
-        bail!("thread '{}' not found", name);
-    }
-    let meta = Meta::read(config, name)?;
-    snapshot::cleanup_sessions(&meta)?;
-
-    let new_meta = Meta::new(name, meta.snapshots);
-
-    for entry in std::fs::read_dir(&run_dir)? {
-        let entry = entry?;
-        let p = entry.path();
-        if p.is_dir() {
-            std::fs::remove_dir_all(&p)?;
-        } else {
-            std::fs::remove_file(&p)?;
-        }
-    }
-
-    new_meta.save(config)?;
-    eprintln!("reset {}", name);
-    Ok(())
-}
-
 fn cmd_patterns(config: &Config, args: &[String]) -> Result<()> {
     let patterns_dir = config.patterns_dir();
 
     if args.is_empty() {
-        // loom patterns — list scripts
         if !patterns_dir.exists() {
             eprintln!("no patterns directory: {}", patterns_dir.display());
             return Ok(());
@@ -379,7 +284,6 @@ fn cmd_patterns(config: &Config, args: &[String]) -> Result<()> {
         return Ok(());
     }
 
-    // loom p <name> [show|run] [args...]
     let name = &args[0];
     let sub = args.get(1).map(|s| s.as_str()).unwrap_or("show");
 
@@ -402,18 +306,19 @@ fn cmd_patterns(config: &Config, args: &[String]) -> Result<()> {
             }
             Ok(())
         }
-        _ => bail!("unknown patterns command '{}' -- try: loom p <name> [show|run]", sub),
+        _ => bail!(
+            "unknown patterns command '{}' -- try: loom p <name> [show|run]",
+            sub
+        ),
     }
 }
 
 fn resolve_pattern(config: &Config, name: &str) -> Result<String> {
     let dir = config.patterns_dir();
-    // Exact match
     let exact = dir.join(name);
     if exact.is_file() {
         return Ok(exact.to_string_lossy().to_string());
     }
-    // Try .sh
     let with_sh = dir.join(format!("{}.sh", name));
     if with_sh.is_file() {
         return Ok(with_sh.to_string_lossy().to_string());
@@ -423,7 +328,9 @@ fn resolve_pattern(config: &Config, name: &str) -> Result<String> {
 
 fn cmd_agents(config: &Config, sub: Option<&str>) -> Result<()> {
     if let Some(name) = sub {
-        let name = if name == "show" { return bail_no_agent_name(); } else { name };
+        if name == "show" {
+            bail!("usage: loom agents show <name>");
+        }
         return show_agent(config, name);
     }
 
@@ -434,23 +341,27 @@ fn cmd_agents(config: &Config, sub: Option<&str>) -> Result<()> {
     let mut names: Vec<_> = config.agents_map.keys().collect();
     names.sort();
     for (i, name) in names.iter().enumerate() {
-        if i > 0 { println!(); }
+        if i > 0 {
+            println!();
+        }
         let agent = &config.agents_map[*name];
         let model = agent.model.as_deref().unwrap_or(&config.model);
         println!("  {}  ({})", name, model);
         let resolved = claude::resolve_at_refs(&agent.system_prompt, &config.agents_dir());
-        let preview: String = resolved.trim().lines()
+        let preview: String = resolved
+            .trim()
+            .lines()
             .map(|l| l.trim())
             .collect::<Vec<_>>()
             .join(" ");
-        let preview = if preview.len() > 300 { format!("{}...", &preview[..300]) } else { preview };
+        let preview = if preview.len() > 300 {
+            format!("{}...", &preview[..300])
+        } else {
+            preview
+        };
         println!("    {}", preview);
     }
     Ok(())
-}
-
-fn bail_no_agent_name() -> Result<()> {
-    anyhow::bail!("usage: loom agents show <name>")
 }
 
 fn show_agent(config: &Config, name: &str) -> Result<()> {
@@ -496,18 +407,42 @@ fn cmd_init(flags: &Flags) -> Result<()> {
     Ok(())
 }
 
-fn fmt_duration(secs: f64) -> String {
-    let total = secs as u64;
-    let h = total / 3600;
-    let m = (total % 3600) / 60;
-    let s = total % 60;
-    if h > 0 {
-        format!("{}h{}m{}s", h, m, s)
-    } else if m > 0 {
-        format!("{}m{}s", m, s)
-    } else {
-        format!("{}s", s)
+fn print_turn_start(
+    turn_n: usize,
+    stage: Option<&str>,
+    speaker: &str,
+    source: Option<&str>,
+    nudge: Option<&str>,
+    model: &str,
+    system_override: Option<&str>,
+) {
+    eprint!("[turn {}] ", turn_n);
+    if let Some(sn) = stage {
+        eprint!("[{}] ", sn);
     }
+    eprint!("{} ", speaker);
+    if let Some(src) = source {
+        eprint!("hears {} ", src);
+    }
+    if let Some(n) = nudge {
+        let preview = if n.len() > 60 { &n[..60] } else { n };
+        eprint!("\"{}\" ", preview);
+    }
+    if let Some(sys) = system_override {
+        eprint!("[system: {}] ", sys);
+    }
+    eprintln!("({}) ...", model);
+}
+
+fn print_turn_done(elapsed: f64, chars: usize, cost: Option<f64>) {
+    let now = chrono::Local::now().format("%H:%M:%S");
+    eprintln!(
+        "  {:.0}s, {} chars, ${:.3} — done at {}",
+        elapsed,
+        chars,
+        cost.unwrap_or(0.0),
+        now
+    );
 }
 
 fn print_usage() {
@@ -520,7 +455,9 @@ fn print_usage() {
     eprintln!("  loom list                                                # list all threads");
     eprintln!("  loom thread <name> do <agent> [\"nudge\"]                  # agent speaks");
     eprintln!("  loom thread <name> do <agent> hears <other> [\"nudge\"]    # agent hears another");
-    eprintln!("  loom thread <name> do <agent> hears all [\"nudge\"]        # agent hears full thread");
+    eprintln!(
+        "  loom thread <name> do <agent> hears all [\"nudge\"]        # agent hears full thread"
+    );
     eprintln!();
     eprintln!("inspection:");
     eprintln!("  loom thread <name> show                                  # thread summary");

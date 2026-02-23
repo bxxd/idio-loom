@@ -1,14 +1,20 @@
 #!/bin/bash
 # test.sh — basic research pattern
-# Usage: ./patterns/test.sh <thread-name> <intake> [model]
-#
-# Example:
-#   ./patterns/test.sh AAPL "AAPL: have a theory that services will drive margins" haiku
+# Usage: loom p test run <intake> [model]
 set -e
 
-NAME="${1:?usage: test.sh <name> <intake> [model]}"
-INTAKE="${2:?usage: test.sh <name> <intake> [model]}"
-MODEL="${3:-}"
+INTAKE="${1:?usage: test.sh <intake> [model]}"
+MODEL="${2:-}"
+PATTERN="test"
+
+# Generate thread name with auto-increment
+i=1
+while loom t "r-${PATTERN}-${i}" show &>/dev/null; do
+  i=$((i + 1))
+done
+NAME="r-${PATTERN}-${i}"
+
+echo "thread: $NAME"
 
 do_turn() {
   if [ -n "$MODEL" ]; then
@@ -18,10 +24,6 @@ do_turn() {
   fi
 }
 
-RUN_DIR="$(loom t "$NAME" show 2>/dev/null | head -1 || true)"
-LAST_OUTPUT=".loom/runs/$NAME/.last_output"
-last_output() { cat "$LAST_OUTPUT"; }
-
 do_turn axe "$INTAKE"
 do_turn bobby hears axe "review this"
 do_turn axe hears bobby "look for idiosyncratic insights"
@@ -29,4 +31,4 @@ do_turn axe "so what is our thesis"
 do_turn writer hears all "make a draft"
 do_turn publisher hears writer "publish it"
 
-echo "done: loom t $NAME show"
+loom t "$NAME" show

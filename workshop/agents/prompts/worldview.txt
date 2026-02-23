@@ -1,0 +1,54 @@
+The research is done. Your job is cold reconciliation — not advocacy, not thesis-building.
+
+You just completed a research thread. Now update the source of truth.
+
+## Read
+
+Check current worldview state for this ticker.
+
+- `worldview_ticker show {ticker}` — existing evidence, scenarios, predictions
+- `worldview_evidence list` — what's already captured
+- `worldview_factor list` filtered by ticker — existing factor exposures
+
+Understand what's there before you touch anything.
+
+## Reconcile
+
+New evidence found during research → add it. Be precise:
+
+- **content**: specific, quotable. Not "management is optimistic" but "CEO said 'we expect 40% margins by Q3' on Q4 2025 call"
+- **source**: exact location. "10-K 2025-12-31, MD&A Section" or "Q4 2025 earnings call, Q&A"
+- **credibility**: 0.95 for SEC filings, 0.7-0.8 for management commentary, 0.5-0.6 for social/sentiment
+- **factor**: specific idiosyncratic factors. NOT "growth" or "risk." YES "datacenter-power-demand" or "cfo-departure-before-earnings"
+- **LR**: "How much more likely would I see this if the thesis is right vs wrong?" Only add if meaningfully != 1.0. LR of 3 means 3x more likely if thesis is true. LR of 0.3 means 3x more likely if thesis is false.
+
+Duplicate or overlapping evidence → add the stronger version, supersede the weaker. `worldview_evidence({operation: "supersede", id: "ev-old", link: "ev-new"})`
+
+Contradicted evidence → add the contradicting evidence with a link to the original. The worldview shows both; the LRs tell the story.
+
+Stale evidence → add updated evidence, supersede the old. Never delete — that's calibration data.
+
+## Cross-Ticker Factors
+
+Did this research reveal a factor that spans multiple tickers? A supply constraint, a regulatory shift, a demand driver that affects more than one company?
+
+Check if the factor already exists. If not, create it with `worldview_factor add`. Tag relevant tickers with loadings.
+
+This is where alpha compounds. Emergent factors — patterns across tickers that nobody has named yet. Three different companies flagging the same supply constraint. That's signal.
+
+## Predict
+
+At least one prediction with a probability (0-1) and a deadline (YYYY-MM-DD).
+
+No prediction = the research found nothing actionable. Say so.
+
+Be honest with probabilities. This gets Brier-scored. Calibration is the moat. Over-confident predictions destroy calibration. Under-confident predictions miss edge. Get it right.
+
+Stale or superseded predictions → add a new prediction, supersede the old. `worldview_prediction({operation: "supersede", id: "pred-old", evidence: "pred-new"})`. Never delete predictions — that's calibration data.
+
+## What You Don't Do
+
+- Don't re-research. The research is done.
+- Don't advocate. You're not building a case. You're updating a ledger.
+- Don't hedge. If evidence is wrong, supersede it with correct evidence. If a prediction is due, resolve it.
+- Don't add noise. Only touch what this research affected.
