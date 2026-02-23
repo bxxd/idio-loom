@@ -43,27 +43,35 @@ idio-loom = { git = "ssh://git@github.com/bxxd/idio-loom.git", tag = "v0.2.0" }
 ```
 
 ```rust
-use idio_loom::{Config, Thread};
+use idio_loom::config::Config;
+use idio_loom::thread::{Thread, RunOpts};
 
 let config = Config::load(Some(workspace_dir))?;
-let mut t = Thread::new(&config, "req-abc123", "opus", 600);
+let t = Thread::new(&config, "req-abc123");
 
-t.run("axe", &intake)?;
-t.run("axe", "forward factors")?;
-t.run("bobby", RunOpts { hears: Some("axe"), nudge: Some("attack this"), ..default() })?;
+t.run("axe", Some(&intake))?;
+t.run("axe", Some("forward factors"))?;
+t.run_opts(&RunOpts {
+    agent: "bobby",
+    nudge: Some("attack this"),
+    source: Some("axe"),
+    model: Some("opus"),
+    timeout: Some(600),
+    ..Default::default()
+})?;
 
-if t.last_output().contains("[VERDICT:RETRY]") {
-    t.rewind(t.step() - 1)?;
-    t.run("axe", RunOpts { hears: Some("bobby"), ..default() })?;
+if t.last_output()?.contains("[VERDICT:RETRY]") {
+    t.rewind(&(t.step()? - 1).to_string())?;
+    t.run_opts(&RunOpts {
+        agent: "axe",
+        source: Some("bobby"),
+        ..Default::default()
+    })?;
 }
 
 // Error handling — caller owns it
-match t.run("axe", "deep dive") {
+match t.run("axe", Some("deep dive")) {
     Ok(_) => {},
-    Err(e) if e.is_timeout() => {
-        t.rewind(t.step() - 1)?;
-        t.run("axe", "deep dive — be concise")?;
-    }
     Err(e) => {
         shell("ibook request update {req_id} --status error");
         return Err(e);
@@ -113,9 +121,9 @@ path = "src/main.rs"
 - `run_turn` (existing, low-level)
 
 **`src/thread.rs`** — NEW high-level Thread API:
-- `Thread::new(config, name, model, timeout)` — create/resume thread
+- `Thread::new(config, name)` — create/resume thread
 - `Thread::run(agent, nudge)` — run a turn (wraps `loom::run_turn`)
-- `Thread::run_with(RunOpts { hears, system, timeout, stage })` — full options
+- `Thread::run_opts(RunOpts { agent, nudge, source, model, system, stage, timeout })` — full options
 - `Thread::rewind(n)` — rewind to snapshot N
 - `Thread::delete()` / `Thread::reset()`
 - `Thread::step()` — completed turn count
