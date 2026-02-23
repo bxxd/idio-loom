@@ -3,9 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use crate::config::Config;
-
-fn default_true() -> bool { true }
+use crate::config::{self, Config};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunningTurn {
@@ -18,7 +16,7 @@ pub struct RunningTurn {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Meta {
     pub name: String,
-    #[serde(default = "default_true")]
+    #[serde(default = "config::default_true")]
     pub snapshots: bool,
     #[serde(default)]
     pub agents: HashMap<String, AgentState>,
@@ -77,22 +75,17 @@ impl Meta {
         }
         let text = std::fs::read_to_string(&path)
             .with_context(|| format!("reading {}", path.display()))?;
-        let meta: Meta = serde_json::from_str(&text)
-            .with_context(|| format!("parsing {}", path.display()))?;
+        let meta: Meta =
+            serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
         Ok(meta)
     }
 
     /// Read meta or create new if thread doesn't exist yet (for `do`)
     pub fn read_or_create(config: &Config, name: &str, snapshots: bool) -> Result<Self> {
-        let path = Self::meta_path(config, name);
-        if !path.exists() {
+        if !Self::meta_path(config, name).exists() {
             return Ok(Meta::new(name, snapshots));
         }
-        let text = std::fs::read_to_string(&path)
-            .with_context(|| format!("reading {}", path.display()))?;
-        let meta: Meta = serde_json::from_str(&text)
-            .with_context(|| format!("parsing {}", path.display()))?;
-        Ok(meta)
+        Self::read(config, name)
     }
 
     pub fn save(&self, config: &Config) -> Result<()> {
@@ -106,10 +99,8 @@ impl Meta {
 
     pub fn ensure_agent(&mut self, name: &str) -> &mut AgentState {
         if !self.agents.contains_key(name) {
-            self.agents.insert(
-                name.to_string(),
-                AgentState { session_id: None },
-            );
+            self.agents
+                .insert(name.to_string(), AgentState { session_id: None });
         }
         self.agents.get_mut(name).unwrap()
     }

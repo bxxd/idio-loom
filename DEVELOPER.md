@@ -1,35 +1,59 @@
-# DEVELOPER.md — idio-loom
+# DEVELOPER.md — loom
 
-## Build
+Binary: `target/release/loom` | Library: `idio_loom` (Rust) + `idio_loom` (Python in `python/`)
+
+## Commands
 
 ```bash
-cargo build --release
+make build              # cargo build --release
+make install            # build + install to ~/.local/bin/loom
+make deploy-dev         # build + install to idio-dev-ibook tenant
+make deploy-prod        # build + install to idio-prod-trawler tenant
+make fmt                # cargo fmt
+make lint               # cargo clippy -- -D warnings
+make test               # cargo test
+make all                # fmt + lint + test
 ```
-
-Binary: `target/release/loom`
 
 ## Architecture
 
+CLI binary + Rust library crate. `Thread` is the single public API. CLI is a thin adapter that parses args and calls `Thread` methods.
+
 ```
 src/
-  main.rs       CLI parsing, subcommand dispatch, display (list/show/read/agents/patterns)
-  config.rs     loom.yaml loading, agent scanning from agents/, path resolution
-  meta.rs       meta.json data types (Meta, AgentState, Turn), read/write/init
+  lib.rs        Crate root — re-exports public modules
+  thread.rs     Thread struct — THE public API (run, show, read, rewind, delete, reset, list)
+  main.rs       CLI adapter — arg parsing, display, patterns, agents, init
+  config.rs     loom.yaml loading, agent scanning, path resolution
+  meta.rs       meta.json types (Meta, AgentState, Turn), read/write
   loom.rs       Turn execution: message building, claude invocation, state updates
-  pattern.rs    Pattern YAML loading, stage sequencing (run_all, run_next)
   claude.rs     Claude subprocess wrapper (new/resume), system prompt assembly, @file resolution
-  snapshot.rs   Snapshot/rewind with session JSONL sync, session cleanup
+  snapshot.rs   Snapshot/rewind with session JSONL sync
+
+python/
+  idio_loom/__init__.py   Python wrapper (subprocess over CLI)
+  pyproject.toml          Package metadata
+```
+
+### One True Path
+
+```
+Thread::run_opts() → loom::run_turn() → claude::claude_new/resume()
+     ↑                                        ↑
+  CLI (main.rs)                          timeout enforcement
+  Rust crate dep (ibook-requests)        (setsid + process group kill)
+  Python subprocess (trawler)
 ```
 
 ### Module responsibilities
 
-- **main.rs** — Subcommand dispatch: `list`, `agents`, `patterns`, `thread <name> ...`. Thread subcommands: pattern mode (start/run/next), manual mode (do), inspection (show/read), snapshots, lifecycle (reset/delete). Owns display logic.
-- **config.rs** — Loads `loom.yaml`, scans `agents/*.yaml` to populate `agents_map`. Path resolution: `workshop_dir()`, `agents_dir()`, `agent_prompts_dir()`, `patterns_dir()`, `state_dir()`, `runs_dir()`. Pure config, no side effects.
-- **meta.rs** — Data model + persistence. `Meta::read()` (errors on missing), `Meta::read_or_create()` (for manual mode), `Meta::save()`, `Meta::init_pattern()`. Owns the meta.json schema.
-- **loom.rs** — Core turn orchestrator. Builds messages from source/nudge, invokes claude (new or resume), records turn, saves input/output/system prompt, prints output. One public entry point: `run_turn()`. `hears all` filters self out and includes nudges.
-- **pattern.rs** — Pattern YAML schema + stage execution. Calls `loom::run_turn()` per stage, tracks progress via `meta.advance_stage()`. First stage gets intake (CLI nudge) prepended to stage nudge.
-- **claude.rs** — Subprocess wrapper. `claude_new()` / `claude_resume()` / `build_system_prompt()`. Also owns `resolve_at_refs()` for `@file` expansion.
-- **snapshot.rs** — Captures and restores full state including claude session JSONLs from `~/.claude/projects/`. `cleanup_sessions()` removes session JSONLs for delete/reset.
+- **thread.rs** — `run()`, `run_opts()`, `step()`, `last_output()`, `read_turn()`, `show()`, `rewind()`, `delete()`, `reset()`, `list_threads()`. Returns data, never prints.
+- **main.rs** — Arg parsing, display, patterns dispatch, agents listing, init. Calls `Thread` and prints.
+- **config.rs** — Loads `loom.yaml`, scans `agents/*.yaml` into `agents_map`. Path resolution methods. Pure config, no side effects.
+- **meta.rs** — `Meta::read()` (errors on missing), `Meta::read_or_create()` (manual mode), `Meta::save()`. Owns meta.json schema.
+- **loom.rs** — Builds messages from source/nudge, invokes claude, records turn, saves trace files. Returns `TurnResult` (output, session_id, elapsed, cost). One entry point: `run_turn()`. `hears all` filters self out and includes nudges.
+- **claude.rs** — `claude_new()` / `claude_resume()` / `build_system_prompt()`. Timeout via `setsid` + process group kill. `resolve_at_refs()` for `@file` expansion.
+- **snapshot.rs** — Captures/restores state + claude session JSONLs from `~/.claude/projects/`. `cleanup_sessions()` for delete/reset.
 
 ### Path resolution
 
@@ -44,30 +68,16 @@ src/
 
 `home` = directory containing loom.yaml. Both `workshop` and `state` support absolute or relative paths.
 
-### Turn tracing
-
-Each turn saves three files for debugging:
-
-| File | When | Content |
-|------|------|---------|
-| `{agent}.system.md` | First turn per agent | Full system prompt sent to Claude |
-| `turn-{N}-{agent}.input.md` | Every turn | Assembled user message (hears + nudge) |
-| `turn-{N}-{agent}.md` | Every turn | Agent output |
-
-Read with `loom t <name> read [turn]` (output) or `loom t <name> read [turn] --input` (input).
-
-### CLI structure
+## CLI
 
 ```
 loom
-├── init [path]
+├── --version (-V)
+├── init [path] [--force]
 ├── list (ls)
 ├── agents [show <name>]
-├── patterns [show [name] | set <name>]
+├── patterns (p) [<name> show | <name> run [args...]]
 └── thread (t) <name>
-    ├── start [pattern] ["intake"]        # init thread, save intake
-    ├── run [pattern] ["intake"]          # start + run all stages (or resume if interrupted)
-    ├── next                              # run next pattern stage
     ├── do <agent> [hears <source>] ["nudge"]
     ├── show (default)
     ├── read [turn] [--input]
@@ -77,47 +87,143 @@ loom
     └── delete (rm)
 ```
 
-Pattern names don't need `.yaml` extension: `loom t X run deep-dive` works.
+**Flags**: `--model <model>`, `--use-system <agent>`, `--dir <path>`, `--input`/`-i`, `--force`/`-f`
 
-### Intake
+**Env**: `LOOM_MODEL` — model override (same as `--model`, for use in scripts)
 
-When running a pattern, the CLI argument is the **intake** — the topic/request that gets prepended to stage 0's nudge:
+**Aliases**: `t`=thread, `p`=patterns, `ls`=list, `rm`=delete, `clear`=reset
+
+## Key behaviors
+
+**Message routing**: `do <agent> "nudge"` sends nudge as input (first turn creates session, subsequent resume). `hears <other>` routes that agent's last output. `hears all` concatenates full thread excluding self, with nudges formatted as `[user → agent]: text`.
+
+**Sessions**: Each agent gets its own claude session ID in `meta.json`. First turn creates, subsequent resume. Full conversation context maintained.
+
+**Model resolution**: `--model` flag > `LOOM_MODEL` env > agent YAML `model:` > loom.yaml `model:`
+
+**@file resolution**: `@filename` in agent system prompts resolves from `agents/prompts/`. In pattern nudges resolves from `patterns/`. Can be whole value or inline within text.
+
+**--use-system**: `--use-system writer` uses writer's system prompt for one turn while keeping the current agent's session context.
+
+**Scratchpad**: Shared per-thread directory with `RESEARCH.md`, `EVIDENCE.md`, `THESES.md`, `NOTES.md`. Path injected into system prompts automatically.
+
+**Snapshots**: Copy meta.json, scratchpad/, turn files, AND claude session JSONLs from `~/.claude/projects/`. Rewind restores all, rolling back agent memory. Session dir derived from `config.claude_cwd()` (not process cwd) to handle `cwd:` overrides. Missing session files produce warnings.
+
+**Session JSONL location**: `~/.claude/projects/{slug}/{session_id}.jsonl` where slug comes from claude working directory (`cwd:` in loom.yaml): `/foo/bar` → `-foo-bar`. Resolved via `config.claude_cwd()`.
+
+### Turn tracing
+
+Each turn saves files in the run directory:
+
+| File | When | Content |
+|------|------|---------|
+| `{agent}.system.md` | First turn per agent | Full system prompt sent to Claude |
+| `turn-{N}-{agent}.input.md` | Every turn | Assembled user message (hears + nudge) |
+| `turn-{N}-{agent}.md` | Every turn | Agent output |
+
+Read with `loom t <name> read [turn]` (output) or `loom t <name> read [turn] --input` (input).
+
+### Patterns
+
+Bash scripts in `workshop/patterns/`. `loom p <name> run` invokes via `bash`, passing args through. No `.sh` extension needed. Each script handles its own thread naming, model selection, and turn sequencing. No Rust-side interpreter.
+
+### Design decisions
+
+- **No frameworks** — Raw arg parsing, no clap. Small binary, instant startup.
+- **Agents as files** — `agents/{name}.yaml`, all loaded on startup. Drop a file to add an agent.
+- **Workshop/state separation** — Workshop (agents, patterns) is deployable. State (runs, snapshots) is per-tenant.
+
+### Versioning
+
+`build.rs` auto-increments `~/.loom_build_number` on each compile, embeds it + git hash. Format: `0.2.0.5 (747a026)`.
+
+### Debug logging
+
+Turn execution emits `eprintln!` prefixed `[loom]`:
+- Turn start: agent, model, system override, new/resume, timeout, prompt sizes
+- Claude command: args, cwd, stdin preview, timeout
+- Claude result: session ID, duration, cost, output chars, stderr (first 30 lines)
+
+Logs go to stderr → journalctl via systemd.
+
+## Using as a Rust library
+
+```toml
+idio-loom = { git = "ssh://git@github.com/bxxd/idio-loom.git" }
+# or: idio-loom = { path = "../loom" }
+```
+
+```rust
+use idio_loom::config::Config;
+use idio_loom::thread::{Thread, RunOpts};
+
+let config = Config::load(Some("/path/to/workspace"))?;
+let t = Thread::new(&config, "my-thread");
+
+let result = t.run("axe", Some("what is 2+2"))?;
+println!("{}", result.output);
+
+let result = t.run_opts(&RunOpts {
+    agent: "axe",
+    nudge: Some("analyze this"),
+    source: Some("bobby"),    // or "all"
+    model: Some("opus"),
+    system: None,             // --use-system override
+    stage: Some("research"),
+    timeout: Some(1800),
+})?;
+// result: output, session_id, elapsed_s, cost_usd
+
+t.step()?;                       // turn count
+t.last_output()?;                // last turn content
+t.show()?;                       // thread summary
+t.read_turn(Some(2), false)?;   // turn 2 output
+t.rewind("3")?;
+t.reset()?;
+t.delete()?;
+```
+
+## Using as a Python package
 
 ```bash
-loom t DOCN run test "DOCN: have a theory that ai will add more demand"
+pip install git+ssh://git@github.com/bxxd/idio-loom.git#subdirectory=python
+# or: pip install -e /path/to/loom/python
 ```
 
-Stage 0 (nudge: "research") receives:
+```python
+from idio_loom import Loom, LoomTimeout, LoomError
+
+loom = Loom(workspace="/path/to/workspace")
+t = loom.thread("my-thread", model="sonnet", timeout=900)
+
+output = t.do("axe", "what is 2+2")
+output = t.do("bobby", hears="axe", nudge="attack this")
+output = t.do("axe", "write it up", system="writer")
+
+print(t.step)          # turn count
+print(t.last_output)   # last turn content
+t.rewind(3)
+t.delete()
 ```
-DOCN: have a theory that ai will add more demand
 
-research
-```
+Wraps CLI via subprocess. Requires `loom` binary on PATH.
 
-Subsequent stages use only their own nudges. Intake is saved in `meta.json` so resumed runs preserve it.
+## Claude Code Version
 
-### Run resume
+**Service users pinned to Claude Code 2.0.76.**
 
-If a `run` is interrupted mid-pattern, re-running picks up where it left off:
+2.1.x bug: subagents share parent's MCP SSE connection → deadlock when parent blocks on Task tool. Caused 4+ hour hang on Feb 19, 2026.
 
 ```bash
-loom t DOCN run              # resumes from current_stage
-loom t DOCN run --force      # wipes and starts fresh
+# Install/downgrade (same for idio-dev-trawler)
+sudo rm -rf /home/idio-dev-ibook/.local/bin/claude /home/idio-dev-ibook/.claude/
+sudo -u idio-dev-ibook bash -c 'curl -fsSL https://claude.ai/install.sh | bash -s -- 2.0.76'
+sudo -u idio-dev-ibook mkdir -p /home/idio-dev-ibook/.claude
+sudo tee /home/idio-dev-ibook/.claude/settings.json <<< '{"skipDangerousModePermissionPrompt":true,"env":{"DISABLE_AUTOUPDATER":"1"}}'
+sudo chown idio-dev-ibook:ubuntu /home/idio-dev-ibook/.claude/settings.json
 ```
 
-### Key design decisions
-
-- **No frameworks** — Raw arg parsing, no clap. Keeps binary small and startup instant.
-- **Agents as individual files** — Each agent is `agents/{name}.yaml`. All are loaded on startup. No aggregate file. Easy to add/remove agents by dropping files.
-- **Workshop/state separation** — Content (agents, patterns) in workshop dir. State (runs, scratchpad, snapshots) in state dir. Workshop is deployable, state is per-tenant.
-- **Session management** — Each agent gets a claude session ID stored in `meta.json`. First turn creates session, subsequent turns resume. Session holds full conversation context.
-- **hears all** — Concatenates full thread excluding self (agent already has session context). Includes nudges formatted as `[user → agent]: nudge text`.
-- **@file resolution** — Context-dependent: agent prompts resolve from `agents/prompts/`, pattern nudges resolve from `patterns/`.
-- **Snapshot = state + sessions** — Snapshots copy meta.json, scratchpad/, turn-*.md, *.input.md, *.system.md AND claude session JSONLs from `~/.claude/projects/`. Rewind restores all, rolling back agent memory.
-
-### Session JSONL location
-
-Claude stores sessions at `~/.claude/projects/{slug}/{session_id}.jsonl` where slug is derived from cwd: `/foo/bar` becomes `-foo-bar`.
+**Do not upgrade past 2.0.76 without testing subagent MCP behavior.**
 
 ## Dependencies
 
@@ -125,8 +231,9 @@ Claude stores sessions at `~/.claude/projects/{slug}/{session_id}.jsonl` where s
 |-------|---------|
 | anyhow | Error handling |
 | serde, serde_json | Meta.json serialization |
-| serde_yaml | Config + pattern loading |
+| serde_yaml | Config + agent loading |
 | chrono | Timestamp display |
+| libc | Process group management (setsid, kill) for timeout |
 
 ## Testing
 
@@ -135,44 +242,21 @@ Smoke test from a workspace with `loom.yaml` and `.mcp.json`:
 ```bash
 cd /var/idio-shared/dev/ibook
 
-# Pattern mode (full run)
-loom t TEST-1 run test "AAPL: earnings analysis" --model haiku
+loom p test run TEST-1 "AAPL: earnings analysis"
 
-# Pattern mode (step by step)
-loom t TEST-2 start test "MSFT: cloud growth"
-loom t TEST-2 next --model haiku
-loom t TEST-2 next --model haiku
+loom t TEST-2 do axe "what is 2+2" --model haiku
+loom t TEST-2 do bobby hears axe --model haiku
+loom t TEST-2 do bobby hears all --model haiku
 loom t TEST-2 show
+loom t TEST-2 read
+loom t TEST-2 read --input
+loom t TEST-2 read 0 --input
 
-# Manual mode
-loom t TEST-3 do axe "what is 2+2" --model haiku
-loom t TEST-3 do bobby hears axe --model haiku
-loom t TEST-3 do bobby hears all --model haiku
-loom t TEST-3 show
-loom t TEST-3 read
-loom t TEST-3 read --input
-loom t TEST-3 read 0 --input
-
-# Introspection
 loom agents
 loom agents show axe
 loom patterns
-loom patterns show
+loom p idio3 show
 
-# Cleanup
 loom t TEST-1 rm
 loom t TEST-2 rm
-loom t TEST-3 rm
 ```
-
-## Workspace setup
-
-Loom runs from a directory containing:
-- `loom.yaml` — config (model, workshop path, state path, default pattern)
-- `.mcp.json` — MCP server config for claude (optional)
-
-Workshop directory contains:
-- `agents/` — agent YAML files + `prompts/` subdirectory
-- `patterns/` — pattern YAML files
-
-State goes to `.loom/` (configurable via `state` in loom.yaml).
