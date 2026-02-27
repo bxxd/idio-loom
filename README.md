@@ -64,6 +64,36 @@ loom t "$NAME" show
 
 Run it: `loom p research run "TSLA: autonomous driving" sonnet`
 
+**4. Embed in your own code**
+
+Loom is also a Rust crate and Python library. Build agent orchestration into your own tools:
+
+```python
+from idio_loom import Loom
+
+loom = Loom(workspace="/path/to/workspace")
+t = loom.thread("earnings-q4", model="sonnet")
+
+t.do("axe", "AAPL: pull 10-K and latest transcript")
+t.do("bobby", hears="axe", nudge="attack this thesis")
+t.do("axe", hears="bobby")
+t.do("axe", "write the memo", system="writer")
+
+print(t.show())
+```
+
+```rust
+use idio_loom::config::Config;
+use idio_loom::thread::Thread;
+
+let config = Config::load(Some("/path/to/workspace"))?;
+let t = Thread::new(&config, "earnings-q4");
+let result = t.run("axe", Some("AAPL: pull 10-K"))?;
+// result.output, result.elapsed_s, result.cost_usd
+```
+
+Same agents, same rewind, same state — just called from code instead of the terminal.
+
 ## Install
 
 ```bash
@@ -197,57 +227,21 @@ system_prompt: |           # appended to all agents (optional)
 
 The `cwd` field is key for tool access — point it at a directory with `.mcp.json` and your agents get MCP servers, file access, whatever Claude Code supports.
 
-## Python API
+## Library APIs
 
-```python
-from idio_loom import Loom, LoomTimeout, LoomError
+**Python** — `t.do()`, `t.show()`, `t.rewind()`, `t.read()`, `t.reset()`, `t.delete()`. Wraps CLI via subprocess. `LoomTimeout` and `LoomError` exceptions.
 
-loom = Loom(workspace="/path/to/workspace")
-t = loom.thread("my-thread", model="opus", timeout=1200)
-
-output = t.do("axe", "investigate AAPL")
-output = t.do("bobby", hears="axe", nudge="attack this thesis")
-output = t.do("axe", hears="bobby")
-output = t.do("axe", "write a draft", system="writer")
-
-print(t.step)          # completed turns (int)
-print(t.last_output)   # last turn content
-print(t.show())        # thread summary
-
-t.rewind(2)            # undo turns after 2
-t.reset()              # clear all turns
-t.delete()             # remove thread
+```bash
+pip install git+https://github.com/bxxd/idio-loom.git#subdirectory=python
 ```
 
-Wraps CLI via subprocess. Requires `loom` binary on PATH.
+**Rust** — `Thread::run()`, `Thread::run_opts()`, `Thread::show()`, `Thread::rewind()`, `Thread::read_turn()`. Returns `TurnResult` with output, session_id, elapsed_s, cost_usd.
 
-## Rust library API
-
-```rust
-use idio_loom::config::Config;
-use idio_loom::thread::{Thread, RunOpts};
-
-let config = Config::load(Some("/path/to/workspace"))?;
-let t = Thread::new(&config, "my-thread");
-
-let result = t.run("axe", Some("investigate AAPL"))?;
-// result: output, session_id, elapsed_s, cost_usd
-
-let result = t.run_opts(&RunOpts {
-    agent: "axe",
-    nudge: Some("analyze this"),
-    source: Some("bobby"),
-    model: Some("opus"),
-    system: None,
-    stage: Some("research"),
-    timeout: Some(1800),
-})?;
-
-t.show()?;                       // thread summary
-t.read_turn(Some(2), false)?;   // turn 2 output
-t.rewind("3")?;                  // rewind to after turn 3
-t.delete()?;
+```toml
+idio-loom = { git = "https://github.com/bxxd/idio-loom.git" }
 ```
+
+See [DEVELOPER.md](DEVELOPER.md) for full API reference.
 
 ## License
 
