@@ -155,7 +155,15 @@ impl<'a> Thread<'a> {
                 .nudge
                 .as_ref()
                 .map(|n| {
-                    let preview = if n.len() > 40 { let mut e = 40; while !n.is_char_boundary(e) { e -= 1; } &n[..e] } else { n };
+                    let preview = if n.len() > 40 {
+                        let mut e = 40;
+                        while !n.is_char_boundary(e) {
+                            e -= 1;
+                        }
+                        &n[..e]
+                    } else {
+                        n
+                    };
                     format!(" \"{}\"", preview)
                 })
                 .unwrap_or_default();

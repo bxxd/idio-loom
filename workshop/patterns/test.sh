@@ -26,9 +26,7 @@ do_turn() {
 
 do_turn axe "$INTAKE"
 do_turn bobby hears axe "review this"
-do_turn axe hears bobby "look for idiosyncratic insights"
-do_turn axe "so what is our thesis"
-do_turn writer hears all "make a draft"
-do_turn publisher hears writer "publish it"
+do_turn axe hears bobby
+do_turn axe "write it up" --use-system writer
 
 loom t "$NAME" show

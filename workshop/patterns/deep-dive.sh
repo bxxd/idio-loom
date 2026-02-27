@@ -30,7 +30,7 @@ last_output() { cat "$LAST_OUTPUT"; }
 # Research
 do_turn axe "$INTAKE
 
-investigate the topic — pull filings, transcripts, data. form a thesis."
+investigate the topic — pull data, form a thesis."
 
 # Critique loop
 do_turn bobby hears axe "attack this thesis. find gaps, check math, challenge assumptions."
@@ -44,8 +44,7 @@ for i in 1 2 3; do
   fi
 done
 
-# Write and edit
-do_turn writer hears all "write the memo"
-do_turn editor hears writer
+# Write memo
+do_turn axe hears all "write the memo" --use-system writer
 
 loom t "$NAME" show
