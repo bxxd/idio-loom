@@ -1,1 +1,2 @@
 model: opus
+system_prompt: "@prompts/axe.txt"

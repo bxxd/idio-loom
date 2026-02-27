@@ -208,7 +208,7 @@ fn run_claude_cmd(mut cmd: Command, message: &str, timeout_secs: u64) -> Result<
     let parsed: ClaudeJson = serde_json::from_str(stdout.trim()).with_context(|| {
         format!(
             "parsing claude JSON output: {}",
-            &stdout[..stdout.len().min(200)]
+            {let mut e = stdout.len().min(200); while !stdout.is_char_boundary(e) { e -= 1; } &stdout[..e]}
         )
     })?;
 
@@ -251,7 +251,9 @@ fn log_command(cmd: &Command, message: &str, timeout_secs: u64) {
         let s = a.to_string_lossy();
         // Truncate long args (system prompts) to keep logs readable
         if s.len() > 200 {
-            format!("\"{}...\" ({} chars)", &s[..100], s.len())
+            let mut end = 100;
+            while !s.is_char_boundary(end) { end -= 1; }
+            format!("\"{}...\" ({} chars)", &s[..end], s.len())
         } else if s.contains(' ') || s.contains('\n') {
             format!("\"{}\"", s.replace('\n', "\\n"))
         } else {
@@ -262,7 +264,9 @@ fn log_command(cmd: &Command, message: &str, timeout_secs: u64) {
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|| ".".to_string());
     let msg_preview = if message.len() > 200 {
-        format!("{}... ({} chars)", &message[..100], message.len())
+        let mut end = 100;
+        while !message.is_char_boundary(end) { end -= 1; }
+        format!("{}... ({} chars)", &message[..end], message.len())
     } else {
         message.to_string()
     };
