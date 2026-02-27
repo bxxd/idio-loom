@@ -199,7 +199,7 @@ system_prompt: |
 **Message routing**:
 - `do axe "investigate X"` — sends "investigate X" as user input
 - `do bobby hears axe` — routes axe's last output to bobby as input
-- `do axe hears all` — concatenates full thread (all agents' outputs) as input
+- `do axe hears all` — concatenates full thread excluding axe's own prior turns
 - `do axe "focus on margins" --use-system writer` — uses writer's system prompt for this turn only, keeping axe's session context
 
 **Model resolution**: `--model` flag > `LOOM_MODEL` env > agent YAML > loom.yaml default
