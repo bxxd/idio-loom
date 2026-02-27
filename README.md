@@ -113,9 +113,11 @@ loom t TEST rm
 Expected:
 
 ```
-TEST (2 turns)
-  #0 axe          0:03  $0.002  "2 + 2 = 4..."
-  #1 bobby        0:04  $0.003  "Yes, this is correct..."
+TEST (2 turns, 2 agents: axe, bobby)
+  [0] axe haiku "what is 2+2? answer in one sentence." (3s, 12 chars $0.002)
+  [1] bobby haiku < axe "is this correct?" (4s, 89 chars $0.003)
+  ────────────────────────
+  total: 7s, $0.005
 ```
 
 ## State and debugging
