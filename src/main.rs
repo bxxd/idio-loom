@@ -355,7 +355,10 @@ fn cmd_agents(config: &Config, sub: Option<&str>) -> Result<()> {
             .collect::<Vec<_>>()
             .join(" ");
         let preview = if preview.len() > 300 {
-            let mut end = 300; while !preview.is_char_boundary(end) { end -= 1; }
+            let mut end = 300;
+            while !preview.is_char_boundary(end) {
+                end -= 1;
+            }
             format!("{}...", &preview[..end])
         } else {
             preview
@@ -401,8 +404,50 @@ fn cmd_init(flags: &Flags) -> Result<()> {
         eprintln!("wrote {}", yaml_path.display());
     }
 
+    // Scaffold default agents
+    let agents_dir = base.join("agents");
+    let prompts_dir = agents_dir.join("prompts");
+
+    let axe_yaml = agents_dir.join("axe.yaml");
+    if !axe_yaml.exists() || flags.force {
+        std::fs::write(
+            &axe_yaml,
+            "model: sonnet\nsystem_prompt: \"@prompts/axe.txt\"\n",
+        )?;
+        std::fs::write(
+            prompts_dir.join("axe.txt"),
+            "You are a research analyst. Your job is to investigate topics thoroughly using primary sources.\n\n\
+             Standards:\n\
+             - Every claim needs a source. Primary data over summaries.\n\
+             - Math before narrative. Quantify when possible.\n\
+             - If there's no signal, say so. \"No finding\" is a valid output.\n\n\
+             Use the tools available to you to pull data, read filings, and verify claims. Write findings to the scratchpad as you go.\n",
+        )?;
+    }
+
+    let bobby_yaml = agents_dir.join("bobby.yaml");
+    if !bobby_yaml.exists() || flags.force {
+        std::fs::write(
+            &bobby_yaml,
+            "model: sonnet\nsystem_prompt: |\n  You are an adversarial reviewer. \
+             Attack claims, find gaps, check math.\n  Be specific — which source, which line, which metric.\n  \
+             If the analysis holds up, say so. If not, explain specifically why.\n",
+        )?;
+    }
+
+    let writer_yaml = agents_dir.join("writer.yaml");
+    if !writer_yaml.exists() || flags.force {
+        std::fs::write(
+            &writer_yaml,
+            "model: sonnet\nsystem_prompt: |\n  You have the data, research, and discussion. \
+             Read everything.\n  Write a clear, well-structured memo in markdown. \
+             Lead with the conclusion.\n",
+        )?;
+    }
+
     eprintln!("initialized {}/", target);
-    eprintln!("  agents/          -- agent definitions and prompt files");
+    eprintln!("  agents/          -- axe, bobby, writer");
+    eprintln!("  agents/prompts/  -- system prompts");
     eprintln!("  patterns/        -- bash scripts (orchestration)");
     eprintln!("  .loom/runs/      -- thread state");
     Ok(())
@@ -426,7 +471,15 @@ fn print_turn_start(
         eprint!("hears {} ", src);
     }
     if let Some(n) = nudge {
-        let preview = if n.len() > 60 { let mut e = 60; while !n.is_char_boundary(e) { e -= 1; } &n[..e] } else { n };
+        let preview = if n.len() > 60 {
+            let mut e = 60;
+            while !n.is_char_boundary(e) {
+                e -= 1;
+            }
+            &n[..e]
+        } else {
+            n
+        };
         eprint!("\"{}\" ", preview);
     }
     if let Some(sys) = system_override {

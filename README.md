@@ -1,32 +1,157 @@
 # Loom
 
-Multi-agent thread engine. Named threads of agent conversations via `claude --resume`, routing messages between agents while preserving session context.
+Multi-agent thread orchestrator for [Claude Code](https://docs.anthropic.com/en/docs/claude-code).
+
+Each agent is a full Claude Code session — own system prompt, own memory, own tools. Loom names the threads, routes messages between agents, snapshots state after every turn, and lets you rewind when things go wrong.
+
+![demo](demo/demo.gif)
+
+## Why
+
+Claude Code is good at one thing at a time. Complex tasks need multiple angles: research, critique, synthesis. But managing multiple `claude --resume` sessions by hand is painful — you lose track of session IDs, can't route output between them, and one bad turn means starting over.
+
+Loom fixes this. You sketch a workflow interactively, rewind when an agent goes off track, and once the flow works, wrap it in a bash script. Interactive debugging becomes automated pipeline.
+
+## The workflow
+
+**1. Sketch interactively**
+
+```bash
+loom init my-project && cd my-project
+loom t AAPL do axe "AAPL: pull the 10-K and latest earnings transcript"
+loom t AAPL do axe "what are the key forward factors?"
+loom t AAPL do bobby hears axe "attack this thesis"
+loom t AAPL do axe hears bobby
+```
+
+Each turn auto-snapshots. Every input and output is saved to disk. You can inspect exactly what was sent and received:
+
+```bash
+loom t AAPL read 2 --input   # what bobby received
+loom t AAPL read 2            # what bobby said
+loom t AAPL show              # full thread summary with timing and cost
+```
+
+**2. Rewind when it goes wrong**
+
+Bobby's critique was weak. Rewind to after turn 1 and try a different approach:
+
+```bash
+loom t AAPL rewind 1                                    # roll back to after turn 1
+loom t AAPL do bobby hears axe "be more specific. check the math on margins."
+```
+
+Rewind restores everything — agent memory, scratchpad files, even Claude's internal session state. It's like the bad turns never happened.
+
+**3. Automate as a pattern**
+
+Once the flow works, it's a bash script:
+
+```bash
+#!/bin/bash
+# patterns/research.sh
+INTAKE="${1:?usage: research.sh <intake> [model]}"
+MODEL="${2:-opus}"
+NAME="research-$(date +%s)"
+
+loom t "$NAME" do axe "$INTAKE" --model "$MODEL"
+loom t "$NAME" do axe "what are the driving forward factors" --model "$MODEL"
+loom t "$NAME" do bobby hears axe "attack this thesis" --model "$MODEL"
+loom t "$NAME" do axe hears bobby --model "$MODEL"
+loom t "$NAME" do axe "write the memo" --use-system writer --model "$MODEL"
+loom t "$NAME" show
+```
+
+Run it: `loom p research run "TSLA: autonomous driving" sonnet`
+
+**4. Embed in your own code**
+
+It's a [Rust crate](#rust-library) and [Python library](#python-library) too. Same agents, same rewind, same state — called from code instead of the terminal.
 
 ## Install
 
 ```bash
+git clone https://github.com/bxxd/idio-loom.git
+cd idio-loom
 make build    # cargo build --release
 make install  # copies to ~/.local/bin/loom
 ```
 
-Python: `pip install -e /path/to/loom/python`
-Rust: `idio-loom = { path = "../loom" }` in Cargo.toml
+**Requires**: [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) installed and authenticated, Rust toolchain.
 
-## Quick Start
+**As a Rust dependency**: `idio-loom = { git = "https://github.com/bxxd/idio-loom.git" }`
+
+**Python**: `pip install git+https://github.com/bxxd/idio-loom.git#subdirectory=python` (wraps CLI via subprocess, requires `loom` on PATH)
+
+## Quickstart
 
 ```bash
-loom init                                              # scaffold workspace
-loom agents                                            # list agents
-loom patterns                                          # list patterns
+git clone https://github.com/bxxd/idio-loom.git
+cd idio-loom && make build && make install
 
-# Pattern mode
-loom p idio3 run "DOCN: met coal"
+mkdir my-project && cd my-project
+loom init
 
-# Manual mode
-loom t TEST-1 do axe "investigate DOCN"
-loom t TEST-1 do bobby hears axe "attack this thesis"
-loom t TEST-1 do axe hears all
-loom t TEST-1 show
+# Run your first thread
+loom t HELLO do axe "what is 2+2?" --model haiku
+loom t HELLO do bobby hears axe "is this right?" --model haiku
+loom t HELLO show
+```
+
+**Are you Claude?** Read `@DEVELOPER.md` for the full architecture, module map, and design decisions.
+
+## Smoke test
+
+```bash
+loom init smoke-test && cd smoke-test
+loom t TEST do axe "what is 2+2? answer in one sentence." --model haiku
+loom t TEST do bobby hears axe "is this correct?" --model haiku
+loom t TEST show
+loom t TEST rm
+```
+
+Expected:
+
+```
+TEST (2 turns, 2 agents: axe, bobby)
+  [0] axe haiku "what is 2+2? answer in one sentence." (3s, 12 chars $0.002)
+  [1] bobby haiku < axe "is this correct?" (4s, 89 chars $0.003)
+  ────────────────────────
+  total: 7s, $0.005
+```
+
+## State and debugging
+
+Every turn is saved to disk. Nothing is hidden.
+
+```
+.loom/runs/AAPL/
+├── meta.json                    # session IDs, turn history
+├── .last_output                 # most recent agent output
+├── scratchpad/                  # shared workspace (RESEARCH.md, NOTES.md, ...)
+├── axe.system.md                # axe's full system prompt (first turn)
+├── bobby.system.md              # bobby's full system prompt
+├── turn-0-axe.md                # turn 0 output
+├── turn-0-axe.input.md          # turn 0 input (what was sent)
+├── turn-1-axe.md
+├── turn-1-axe.input.md
+├── turn-2-bobby.md
+├── turn-2-bobby.input.md
+└── snapshots/
+    ├── 0/                       # state after turn 0
+    ├── 1/                       # state after turn 1
+    └── 2/                       # state after turn 2
+```
+
+Snapshots include Claude's session JSONLs — rewind truly rolls back agent memory, not just loom's state.
+
+```bash
+loom t AAPL read 0            # axe's first output
+loom t AAPL read 2 --input    # exactly what bobby received
+loom t AAPL rewind 1          # undo turns 2+ (agents forget them too)
+loom t AAPL snapshot          # manual snapshot (auto-snapshot is on by default)
+loom t AAPL reset             # clear all turns, keep thread name
+loom t AAPL rm                # delete everything
 ```
 
 ## CLI
@@ -53,97 +178,63 @@ loom
 
 **Aliases**: `t`=thread, `p`=patterns, `ls`=list, `rm`=delete, `clear`=reset
 
-## Workspace
+## Agents and routing
 
-```
-workspace/
-├── loom.yaml                          # config
-├── .mcp.json                          # MCP config for claude (optional)
-├── agents/                            # in workshop dir
-│   ├── axe.yaml
-│   ├── bobby.yaml
-│   └── prompts/
-│       └── writer.txt
-├── patterns/                          # in workshop dir
-│   └── idio3.sh
-└── .loom/                             # state dir
-    └── runs/
-        └── <thread>/
-            ├── meta.json
-            ├── .last_output
-            ├── scratchpad/{RESEARCH,EVIDENCE,THESES,NOTES}.md
-            ├── {agent}.system.md      # system prompt (first turn)
-            ├── turn-{N}-{agent}.md    # output
-            ├── turn-{N}-{agent}.input.md
-            └── snapshots/{N}/
-```
-
-### loom.yaml
+Agents are YAML files. Drop a file in `agents/`, it's available immediately.
 
 ```yaml
-model: sonnet              # default model
-timeout: 900               # turn timeout in seconds
-workshop: .                # path to agents/ and patterns/ (absolute or relative to loom.yaml dir)
-state: .loom               # path to state dir (absolute or relative to loom.yaml dir)
-snapshots: true            # auto-snapshot after each turn
-cwd: /some/path            # claude subprocess working directory (optional, picks up CLAUDE.md/.mcp.json)
-system_prompt: |           # global system prompt appended to all agents (optional)
-  Extra instructions here.
+# agents/axe.yaml
+model: opus
+system_prompt: "@prompts/axe.txt"    # loads from agents/prompts/axe.txt
 ```
-
-### Agents — agents/*.yaml
-
-Each file = one agent. All loaded automatically.
 
 ```yaml
-model: opus                                          # model override (optional)
-system_prompt: "@prompts/writer.txt"                 # from file, inline text, or mixed
+# agents/bobby.yaml
+model: sonnet
+system_prompt: |
+  You are an adversarial reviewer. Find gaps, check math, challenge assumptions.
+  If the analysis survives your critique, say so. If not, explain specifically why.
 ```
+
+**Message routing**:
+- `do axe "investigate X"` — sends "investigate X" as user input
+- `do bobby hears axe` — routes axe's last output to bobby as input
+- `do axe hears all` — concatenates full thread excluding axe's own prior turns
+- `do axe "focus on margins" --use-system writer` — uses writer's system prompt for this turn only, keeping axe's session context
 
 **Model resolution**: `--model` flag > `LOOM_MODEL` env > agent YAML > loom.yaml default
 
-**@file resolution**: agent prompts resolve from `agents/prompts/`, pattern nudges from `patterns/`
+## Workspace config
 
-### Patterns — patterns/*.sh
-
-Bash scripts that orchestrate multi-turn threads. `loom p <name> run` invokes via bash, passing args through. No `.sh` extension needed.
-
-```bash
-#!/bin/bash
-INTAKE="${1:?usage: example.sh <intake> [model]}"
-MODEL="${2:-sonnet}"
-NAME="example-$(date +%s)"
-
-loom t "$NAME" do axe "$INTAKE" --model "$MODEL"
-loom t "$NAME" do bobby hears axe "attack this thesis" --model "$MODEL"
-loom t "$NAME" do axe hears bobby --model "$MODEL"
-loom t "$NAME" do axe "write it up" --use-system writer --model "$MODEL"
-loom t "$NAME" show
+```yaml
+# loom.yaml
+model: sonnet              # default model
+timeout: 900               # turn timeout (seconds)
+workshop: .                # path to agents/ and patterns/
+state: .loom               # path to state dir
+snapshots: true            # auto-snapshot after each turn
+cwd: /some/path            # claude working directory (optional — picks up CLAUDE.md, .mcp.json)
+system_prompt: |           # appended to all agents (optional)
+  Extra instructions here.
 ```
 
-## Concepts
+The `cwd` field is key for tool access — point it at a directory with `.mcp.json` and your agents get MCP servers, file access, whatever Claude Code supports.
 
-**Message routing**: `do <agent> "nudge"` sends nudge as input. `hears <other>` routes that agent's last output. `hears all` concatenates full thread excluding self (includes nudges as `[user → agent]: text`).
+## Python library
 
-**Sessions**: Each agent gets its own claude session. First turn creates it, subsequent turns resume. Full conversation history maintained automatically.
+```bash
+pip install git+https://github.com/bxxd/idio-loom.git#subdirectory=python
+```
 
-**Scratchpad**: Shared `scratchpad/` directory per thread with `RESEARCH.md`, `EVIDENCE.md`, `THESES.md`, `NOTES.md`. Path injected into system prompts.
-
-**--use-system**: `--use-system writer` makes the current agent use writer's system prompt for one turn while keeping its own session context.
-
-**Snapshots**: Capture full state including claude session JSONLs. `rewind <N>` restores to after turn N, rolling back agent memory.
-
-**Turn tracing**: Each turn saves `turn-{N}-{agent}.md` (output) and `turn-{N}-{agent}.input.md` (input). First turn per agent saves `{agent}.system.md`. Read with `loom t <name> read [turn] [--input]`.
-
-## Python API
+Wraps the CLI via subprocess. Requires `loom` binary on PATH.
 
 ```python
 from idio_loom import Loom, LoomTimeout, LoomError
 
-loom = Loom(workspace="/var/idio-shared/dev/ibook")
-t = loom.thread("DOCN-v1", model="opus", timeout=1200)
+loom = Loom(workspace="/path/to/workspace")
+t = loom.thread("my-thread", model="opus", timeout=1200)
 
-output = t.do("axe", "investigate DOCN: met coal thesis")
+output = t.do("axe", "investigate AAPL")
 output = t.do("bobby", hears="axe", nudge="attack this thesis")
 output = t.do("axe", hears="bobby")
 output = t.do("axe", "write a draft", system="writer")
@@ -152,16 +243,18 @@ print(t.step)          # completed turns (int)
 print(t.last_output)   # last turn content
 print(t.show())        # thread summary
 
-t.rewind(2)
-t.reset()
-t.delete()
+t.rewind(2)            # undo turns after 2
+t.reset()              # clear all turns
+t.delete()             # remove thread
 ```
 
 `t.do()` params: `agent`, `nudge=`, `hears=`, `system=`, `model=`, `timeout=`
 
-Wraps CLI via subprocess. Requires `loom` binary on PATH.
+## Rust library
 
-## Rust Library API
+```toml
+idio-loom = { git = "https://github.com/bxxd/idio-loom.git" }
+```
 
 ```rust
 use idio_loom::config::Config;
@@ -171,56 +264,26 @@ let config = Config::load(Some("/path/to/workspace"))?;
 let t = Thread::new(&config, "my-thread");
 
 // Simple
-let result = t.run("axe", Some("investigate DOCN"))?;
+let result = t.run("axe", Some("investigate AAPL"))?;
+// result: output, session_id, elapsed_s, cost_usd
 
 // Full options
 let result = t.run_opts(&RunOpts {
     agent: "axe",
     nudge: Some("analyze this"),
-    source: Some("bobby"),       // or "all"
+    source: Some("bobby"),
     model: Some("opus"),
-    system: None,                // --use-system
+    system: None,
     stage: Some("research"),
     timeout: Some(1800),
 })?;
-// result: output, session_id, elapsed_s, cost_usd
 
-t.step()?;                       // turn count
-t.last_output()?;                // last turn content
 t.show()?;                       // thread summary
 t.read_turn(Some(2), false)?;   // turn 2 output
-t.read_turn(None, true)?;       // latest input
-t.rewind("3")?;
-t.reset()?;
+t.rewind("3")?;                  // rewind to after turn 3
 t.delete()?;
 ```
 
-## Examples
+## License
 
-```bash
-# Research session
-loom t DOCN-1 do axe "DOCN: met coal. pull 10-K, latest transcript, price data"
-loom t DOCN-1 do axe "what are the key forward factors?"
-loom t DOCN-1 do bobby hears axe "attack this thesis"
-loom t DOCN-1 do axe hears bobby
-loom t DOCN-1 do axe "write it up" --use-system writer
-loom t DOCN-1 show
-
-# Patterns
-loom p idio3 run "AAPL: earnings analysis" opus
-loom p deep-dive run "SLB: offshore drilling"
-
-# Quick test
-loom t TEST do axe "what is 2+2" --model haiku
-loom t TEST do bobby hears axe --model haiku
-loom t TEST rm
-
-# Rewind
-loom t DOCN-1 rewind 3
-loom t DOCN-1 do axe "try a different angle"
-
-# Debug
-loom t DOCN-1 read 0 --input    # what was sent
-loom t DOCN-1 read 0            # what came back
-loom agents show axe             # system prompt
-```
+MIT
