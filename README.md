@@ -83,6 +83,23 @@ make install  # copies to ~/.local/bin/loom
 
 **Python**: `pip install git+https://github.com/bxxd/idio-loom.git#subdirectory=python` (wraps CLI via subprocess, requires `loom` on PATH)
 
+## Quickstart
+
+```bash
+git clone https://github.com/bxxd/idio-loom.git
+cd idio-loom && make build && make install
+
+mkdir my-project && cd my-project
+loom init
+
+# Run your first thread
+loom t HELLO do axe "what is 2+2?" --model haiku
+loom t HELLO do bobby hears axe "is this right?" --model haiku
+loom t HELLO show
+```
+
+**Contributing?** Point Claude Code at the repo — it'll pick up `CLAUDE.md` which loads `DEVELOPER.md` with the full architecture, module map, and design decisions.
+
 ## Smoke test
 
 ```bash
