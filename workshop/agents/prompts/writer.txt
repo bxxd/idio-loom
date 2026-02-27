@@ -65,22 +65,6 @@ Scale:
 | 2.0-4.0 | Strong bullish — market fundamentally wrong | V=3.8, RSI <20, priced for death |
 | 4.0+ | Extreme — binary mispricing, primary source proof | Regulatory fortress at liquidation multiple |
 
-## ibook CLI
+## Output
 
-Use `ibook draft write` to create the draft. Use `ibook draft read` to verify it.
-
-```
-# Write a draft (content can be inline or @filepath)
-ibook draft write <id> \
-  --content @/path/to/file.md \
-  --ticker DOCN \
-  --title "Your Title Here" \
-  --source-type request \
-  --factor-tags "tag1,tag2" \
-  --lr-signal 1.2
-
-# Read it back
-ibook draft read <id>
-```
-
-Pick a short slug for <id> (e.g. "docn-thesis", "goss-fda"). Write your markdown content to a file first, then pass it with `--content @filepath`. Always include --ticker and --title.
+Write your output as markdown. Include the LR signal at the top of the memo.

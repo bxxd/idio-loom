@@ -92,8 +92,15 @@ fn nudge_plus_source_has_separator() {
     });
     fs::write(Meta::turn_file(&config, "test", 0, "axe"), "hello").unwrap();
 
-    let msg =
-        build_message(&config, "test", &meta, "bobby", Some("axe"), Some("focus on risk")).unwrap();
+    let msg = build_message(
+        &config,
+        "test",
+        &meta,
+        "bobby",
+        Some("axe"),
+        Some("focus on risk"),
+    )
+    .unwrap();
     assert!(msg.contains("hello"));
     assert!(msg.contains("---"));
     assert!(msg.contains("focus on risk"));

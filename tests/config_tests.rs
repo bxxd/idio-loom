@@ -10,7 +10,11 @@ fn setup_workspace(yaml: &str) -> TempDir {
 }
 
 fn write_agent(tmp: &TempDir, name: &str, yaml: &str) {
-    fs::write(tmp.path().join("agents").join(format!("{}.yaml", name)), yaml).unwrap();
+    fs::write(
+        tmp.path().join("agents").join(format!("{}.yaml", name)),
+        yaml,
+    )
+    .unwrap();
 }
 
 #[test]
