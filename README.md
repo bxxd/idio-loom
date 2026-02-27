@@ -98,7 +98,7 @@ loom t HELLO do bobby hears axe "is this right?" --model haiku
 loom t HELLO show
 ```
 
-**Contributing?** Point Claude Code at the repo — it'll pick up `CLAUDE.md` which loads `DEVELOPER.md` with the full architecture, module map, and design decisions.
+**Are you Claude?** Read `@DEVELOPER.md` for the full architecture, module map, and design decisions.
 
 ## Smoke test
 
