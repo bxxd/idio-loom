@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Generate a fake asciinema .cast file for the loom demo GIF."""
 import json
-import sys
 
 events = []
 t = 0.0
@@ -10,9 +9,6 @@ PROMPT = "\x1b[32m$\x1b[0m "
 BOLD = "\x1b[1m"
 DIM = "\x1b[2m"
 RESET = "\x1b[0m"
-CYAN = "\x1b[36m"
-YELLOW = "\x1b[33m"
-GREEN = "\x1b[32m"
 
 def out(text, dt=0.0):
     global t
