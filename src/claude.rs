@@ -206,14 +206,20 @@ fn run_claude_cmd(mut cmd: Command, message: &str, timeout_secs: u64) -> Result<
     }
 
     let parsed: ClaudeJson = serde_json::from_str(stdout.trim()).with_context(|| {
-        format!(
-            "parsing claude JSON output: {}",
-            {let mut e = stdout.len().min(200); while !stdout.is_char_boundary(e) { e -= 1; } &stdout[..e]}
-        )
+        format!("parsing claude JSON output: {}", {
+            let mut e = stdout.len().min(200);
+            while !stdout.is_char_boundary(e) {
+                e -= 1;
+            }
+            &stdout[..e]
+        })
     })?;
 
     if parsed.is_error == Some(true) {
-        eprintln!("[loom] claude error: {}", parsed.result.as_deref().unwrap_or("unknown"));
+        eprintln!(
+            "[loom] claude error: {}",
+            parsed.result.as_deref().unwrap_or("unknown")
+        );
         bail!(
             "claude returned error: {}",
             parsed.result.as_deref().unwrap_or("unknown")
@@ -247,25 +253,33 @@ fn run_claude_cmd(mut cmd: Command, message: &str, timeout_secs: u64) -> Result<
 
 fn log_command(cmd: &Command, message: &str, timeout_secs: u64) {
     let prog = cmd.get_program().to_string_lossy();
-    let args: Vec<String> = cmd.get_args().map(|a| {
-        let s = a.to_string_lossy();
-        // Truncate long args (system prompts) to keep logs readable
-        if s.len() > 200 {
-            let mut end = 100;
-            while !s.is_char_boundary(end) { end -= 1; }
-            format!("\"{}...\" ({} chars)", &s[..end], s.len())
-        } else if s.contains(' ') || s.contains('\n') {
-            format!("\"{}\"", s.replace('\n', "\\n"))
-        } else {
-            s.to_string()
-        }
-    }).collect();
-    let cwd = cmd.get_current_dir()
+    let args: Vec<String> = cmd
+        .get_args()
+        .map(|a| {
+            let s = a.to_string_lossy();
+            // Truncate long args (system prompts) to keep logs readable
+            if s.len() > 200 {
+                let mut end = 100;
+                while !s.is_char_boundary(end) {
+                    end -= 1;
+                }
+                format!("\"{}...\" ({} chars)", &s[..end], s.len())
+            } else if s.contains(' ') || s.contains('\n') {
+                format!("\"{}\"", s.replace('\n', "\\n"))
+            } else {
+                s.to_string()
+            }
+        })
+        .collect();
+    let cwd = cmd
+        .get_current_dir()
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|| ".".to_string());
     let msg_preview = if message.len() > 200 {
         let mut end = 100;
-        while !message.is_char_boundary(end) { end -= 1; }
+        while !message.is_char_boundary(end) {
+            end -= 1;
+        }
         format!("{}... ({} chars)", &message[..end], message.len())
     } else {
         message.to_string()

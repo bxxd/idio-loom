@@ -7,8 +7,6 @@ Binary: `target/release/loom` | Library: `idio_loom` (Rust) + `idio_loom` (Pytho
 ```bash
 make build              # cargo build --release
 make install            # build + install to ~/.local/bin/loom
-make deploy-dev         # build + install to idio-dev-ibook tenant
-make deploy-prod        # build + install to idio-prod-trawler tenant
 make fmt                # cargo fmt
 make lint               # cargo clippy -- -D warnings
 make test               # cargo test
@@ -41,8 +39,8 @@ python/
 Thread::run_opts() → loom::run_turn() → claude::claude_new/resume()
      ↑                                        ↑
   CLI (main.rs)                          timeout enforcement
-  Rust crate dep (ibook-requests)        (setsid + process group kill)
-  Python subprocess (trawler)
+  Rust crate dep                         (setsid + process group kill)
+  Python subprocess
 ```
 
 ### Module responsibilities
@@ -67,31 +65,6 @@ Thread::run_opts() → loom::run_turn() → claude::claude_new/resume()
 | Runs | `runs_dir()` | `{state}/runs/` |
 
 `home` = directory containing loom.yaml. Both `workshop` and `state` support absolute or relative paths.
-
-## CLI
-
-```
-loom
-├── --version (-V)
-├── init [path] [--force]
-├── list (ls)
-├── agents [show <name>]
-├── patterns (p) [<name> show | <name> run [args...]]
-└── thread (t) <name>
-    ├── do <agent> [hears <source>] ["nudge"]
-    ├── show (default)
-    ├── read [turn] [--input]
-    ├── snapshot
-    ├── rewind <N>
-    ├── reset (clear)
-    └── delete (rm)
-```
-
-**Flags**: `--model <model>`, `--use-system <agent>`, `--dir <path>`, `--input`/`-i`, `--force`/`-f`
-
-**Env**: `LOOM_MODEL` — model override (same as `--model`, for use in scripts)
-
-**Aliases**: `t`=thread, `p`=patterns, `ls`=list, `rm`=delete, `clear`=reset
 
 ## Key behaviors
 
@@ -131,7 +104,7 @@ Bash scripts in `workshop/patterns/`. `loom p <name> run` invokes via `bash`, pa
 
 - **No frameworks** — Raw arg parsing, no clap. Small binary, instant startup.
 - **Agents as files** — `agents/{name}.yaml`, all loaded on startup. Drop a file to add an agent.
-- **Workshop/state separation** — Workshop (agents, patterns) is deployable. State (runs, snapshots) is per-tenant.
+- **Workshop/state separation** — Workshop (agents, patterns) is deployable. State (runs, snapshots) is per-workspace.
 
 ### Versioning
 
@@ -144,86 +117,40 @@ Turn execution emits `eprintln!` prefixed `[loom]`:
 - Claude command: args, cwd, stdin preview, timeout
 - Claude result: session ID, duration, cost, output chars, stderr (first 30 lines)
 
-Logs go to stderr → journalctl via systemd.
+Logs go to stderr.
 
-## Using as a Rust library
+## State management internals
 
-```toml
-idio-loom = { git = "ssh://git@github.com/bxxd/idio-loom.git" }
-# or: idio-loom = { path = "../loom" }
-```
+Loom's key differentiator is full state capture and rewind, including Claude Code's own session memory.
 
-```rust
-use idio_loom::config::Config;
-use idio_loom::thread::{Thread, RunOpts};
+**What gets snapshotted** (after every turn, if `snapshots: true`):
+- `meta.json` — session IDs, turn history, agent states
+- `scratchpad/` — shared files between agents
+- `turn-*.md` / `turn-*.input.md` — all turn traces
+- Claude session JSONLs from `~/.claude/projects/{slug}/` — the agent's actual conversation history
 
-let config = Config::load(Some("/path/to/workspace"))?;
-let t = Thread::new(&config, "my-thread");
+**Rewind** restores ALL of the above. When you `rewind 3`, turns 4+ are deleted and Claude's session files are rolled back. The agent literally forgets those turns happened.
 
-let result = t.run("axe", Some("what is 2+2"))?;
-println!("{}", result.output);
+**Session JSONL location**: `~/.claude/projects/{slug}/{session_id}.jsonl` where slug = `config.claude_cwd()` path with `/` → `-`. Example: cwd `/home/user/project` → slug `-home-user-project`.
 
-let result = t.run_opts(&RunOpts {
-    agent: "axe",
-    nudge: Some("analyze this"),
-    source: Some("bobby"),    // or "all"
-    model: Some("opus"),
-    system: None,             // --use-system override
-    stage: Some("research"),
-    timeout: Some(1800),
-})?;
-// result: output, session_id, elapsed_s, cost_usd
+**Why this matters**: Without session rollback, rewinding loom state would leave Claude remembering the "future" turns. The agent would reference deleted context. Snapshot/rewind sync guarantees consistency.
 
-t.step()?;                       // turn count
-t.last_output()?;                // last turn content
-t.show()?;                       // thread summary
-t.read_turn(Some(2), false)?;   // turn 2 output
-t.rewind("3")?;
-t.reset()?;
-t.delete()?;
-```
-
-## Using as a Python package
+## Testing
 
 ```bash
-pip install git+ssh://git@github.com/bxxd/idio-loom.git#subdirectory=python
-# or: pip install -e /path/to/loom/python
+make all                    # fmt + lint + test (29 unit tests)
 ```
 
-```python
-from idio_loom import Loom, LoomTimeout, LoomError
-
-loom = Loom(workspace="/path/to/workspace")
-t = loom.thread("my-thread", model="sonnet", timeout=900)
-
-output = t.do("axe", "what is 2+2")
-output = t.do("bobby", hears="axe", nudge="attack this")
-output = t.do("axe", "write it up", system="writer")
-
-print(t.step)          # turn count
-print(t.last_output)   # last turn content
-t.rewind(3)
-t.delete()
-```
-
-Wraps CLI via subprocess. Requires `loom` binary on PATH.
-
-## Claude Code Version
-
-**Service users pinned to Claude Code 2.0.76.**
-
-2.1.x bug: subagents share parent's MCP SSE connection → deadlock when parent blocks on Task tool. Caused 4+ hour hang on Feb 19, 2026.
+Smoke test from any workspace with `loom.yaml`:
 
 ```bash
-# Install/downgrade (same for idio-dev-trawler)
-sudo rm -rf /home/idio-dev-ibook/.local/bin/claude /home/idio-dev-ibook/.claude/
-sudo -u idio-dev-ibook bash -c 'curl -fsSL https://claude.ai/install.sh | bash -s -- 2.0.76'
-sudo -u idio-dev-ibook mkdir -p /home/idio-dev-ibook/.claude
-sudo tee /home/idio-dev-ibook/.claude/settings.json <<< '{"skipDangerousModePermissionPrompt":true,"env":{"DISABLE_AUTOUPDATER":"1"}}'
-sudo chown idio-dev-ibook:ubuntu /home/idio-dev-ibook/.claude/settings.json
+loom t TEST do axe "what is 2+2? answer briefly" --model haiku
+loom t TEST do bobby hears axe "is this correct?" --model haiku
+loom t TEST show
+loom t TEST read 0
+loom t TEST read 1 --input
+loom t TEST rm
 ```
-
-**Do not upgrade past 2.0.76 without testing subagent MCP behavior.**
 
 ## Dependencies
 
@@ -234,29 +161,4 @@ sudo chown idio-dev-ibook:ubuntu /home/idio-dev-ibook/.claude/settings.json
 | serde_yaml | Config + agent loading |
 | chrono | Timestamp display |
 | libc | Process group management (setsid, kill) for timeout |
-
-## Testing
-
-Smoke test from a workspace with `loom.yaml` and `.mcp.json`:
-
-```bash
-cd /var/idio-shared/dev/ibook
-
-loom p test run TEST-1 "AAPL: earnings analysis"
-
-loom t TEST-2 do axe "what is 2+2" --model haiku
-loom t TEST-2 do bobby hears axe --model haiku
-loom t TEST-2 do bobby hears all --model haiku
-loom t TEST-2 show
-loom t TEST-2 read
-loom t TEST-2 read --input
-loom t TEST-2 read 0 --input
-
-loom agents
-loom agents show axe
-loom patterns
-loom p idio3 show
-
-loom t TEST-1 rm
-loom t TEST-2 rm
-```
+| dirs | Home directory resolution |

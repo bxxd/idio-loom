@@ -355,7 +355,10 @@ fn cmd_agents(config: &Config, sub: Option<&str>) -> Result<()> {
             .collect::<Vec<_>>()
             .join(" ");
         let preview = if preview.len() > 300 {
-            let mut end = 300; while !preview.is_char_boundary(end) { end -= 1; }
+            let mut end = 300;
+            while !preview.is_char_boundary(end) {
+                end -= 1;
+            }
             format!("{}...", &preview[..end])
         } else {
             preview
@@ -426,7 +429,15 @@ fn print_turn_start(
         eprint!("hears {} ", src);
     }
     if let Some(n) = nudge {
-        let preview = if n.len() > 60 { let mut e = 60; while !n.is_char_boundary(e) { e -= 1; } &n[..e] } else { n };
+        let preview = if n.len() > 60 {
+            let mut e = 60;
+            while !n.is_char_boundary(e) {
+                e -= 1;
+            }
+            &n[..e]
+        } else {
+            n
+        };
         eprint!("\"{}\" ", preview);
     }
     if let Some(sys) = system_override {

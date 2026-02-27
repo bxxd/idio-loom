@@ -38,7 +38,11 @@ fn sync_sessions(
                         std::fs::copy(&project_jsonl, &snap_jsonl)?;
                         eprintln!("  session saved: {} ({})", agent_name, sid);
                     } else {
-                        eprintln!("  WARNING: session file missing for {}: {}", agent_name, project_jsonl.display());
+                        eprintln!(
+                            "  WARNING: session file missing for {}: {}",
+                            agent_name,
+                            project_jsonl.display()
+                        );
                     }
                     if project_sub.exists() && project_sub.is_dir() {
                         copy_dir_recursive(&project_sub, &snap_sub)?;
@@ -50,7 +54,10 @@ fn sync_sessions(
                         std::fs::copy(&snap_jsonl, &project_jsonl)?;
                         eprintln!("  session restored: {} ({})", agent_name, sid);
                     } else {
-                        eprintln!("  WARNING: no session backup for {} — resume will fail", agent_name);
+                        eprintln!(
+                            "  WARNING: no session backup for {} — resume will fail",
+                            agent_name
+                        );
                     }
                     if snap_sub.exists() && snap_sub.is_dir() {
                         if project_sub.exists() {
