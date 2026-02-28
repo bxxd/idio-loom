@@ -2,7 +2,7 @@ use crate::config::{Agent, Config};
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 use std::os::unix::process::CommandExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 #[derive(Debug)]
@@ -112,6 +112,7 @@ pub fn claude_new(
     model: &str,
     system_prompt: &str,
     timeout_secs: u64,
+    session_jsonl: Option<PathBuf>,
 ) -> Result<ClaudeResult> {
     let mut cmd = base_cmd(config);
     cmd.arg("--model").arg(model);
@@ -120,7 +121,7 @@ pub fn claude_new(
         cmd.arg("--append-system-prompt").arg(system_prompt);
     }
 
-    run_claude_cmd(cmd, message, timeout_secs)
+    run_claude_cmd(cmd, message, timeout_secs, session_jsonl)
 }
 
 pub fn claude_resume(
@@ -129,16 +130,22 @@ pub fn claude_resume(
     message: &str,
     system_prompt: &str,
     timeout_secs: u64,
+    session_jsonl: Option<PathBuf>,
 ) -> Result<ClaudeResult> {
     let mut cmd = base_cmd(config);
     cmd.arg("--resume").arg(session_id);
     if !system_prompt.is_empty() {
         cmd.arg("--append-system-prompt").arg(system_prompt);
     }
-    run_claude_cmd(cmd, message, timeout_secs)
+    run_claude_cmd(cmd, message, timeout_secs, session_jsonl)
 }
 
-fn run_claude_cmd(mut cmd: Command, message: &str, timeout_secs: u64) -> Result<ClaudeResult> {
+fn run_claude_cmd(
+    mut cmd: Command,
+    message: &str,
+    timeout_secs: u64,
+    session_jsonl: Option<PathBuf>,
+) -> Result<ClaudeResult> {
     use std::io::Read;
     use std::time::Instant;
 
@@ -167,20 +174,47 @@ fn run_claude_cmd(mut cmd: Command, message: &str, timeout_secs: u64) -> Result<
     }
 
     let t0 = Instant::now();
+    let max_timeout = timeout_secs.saturating_mul(2);
+    let idle_limit = 300u64; // 5 minutes
 
     // Poll for completion with timeout
     loop {
         match child.try_wait() {
             Ok(Some(_status)) => break,
             Ok(None) => {
-                if timeout_secs > 0 && t0.elapsed().as_secs() > timeout_secs {
+                let elapsed = t0.elapsed().as_secs();
+                if timeout_secs > 0 && elapsed > timeout_secs {
+                    // Hard cap — kill no matter what
+                    if elapsed > max_timeout {
+                        let pid = child.id() as i32;
+                        unsafe { libc::kill(-pid, libc::SIGKILL); }
+                        let _ = child.wait();
+                        bail!("claude hit max timeout after {}s", elapsed);
+                    }
+
+                    // Check session file activity — if recently modified, keep waiting
+                    if let Some(ref path) = session_jsonl {
+                        if let Ok(md) = std::fs::metadata(path) {
+                            if let Ok(modified) = md.modified() {
+                                let idle = modified.elapsed().unwrap_or_default().as_secs();
+                                if idle < idle_limit {
+                                    // Still active, check again next poll
+                                    std::thread::sleep(std::time::Duration::from_secs(1));
+                                    continue;
+                                }
+                                eprintln!(
+                                    "[loom] session idle {}s (limit {}s), killing after {}s",
+                                    idle, idle_limit, elapsed
+                                );
+                            }
+                        }
+                    }
+
                     // Kill the process group
                     let pid = child.id() as i32;
-                    unsafe {
-                        libc::kill(-pid, libc::SIGKILL);
-                    }
+                    unsafe { libc::kill(-pid, libc::SIGKILL); }
                     let _ = child.wait();
-                    bail!("claude timed out after {}s", timeout_secs);
+                    bail!("claude timed out after {}s", elapsed);
                 }
                 std::thread::sleep(std::time::Duration::from_secs(1));
             }
