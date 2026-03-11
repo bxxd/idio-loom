@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use crate::config::Config;
 use crate::meta::{AgentState, Meta};
 
-fn session_dir(config: &Config) -> PathBuf {
+pub(crate) fn session_dir(config: &Config) -> PathBuf {
     let cwd = config.claude_cwd();
     let slug = cwd.to_string_lossy().replace('/', "-");
     let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());

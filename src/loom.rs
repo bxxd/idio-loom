@@ -96,6 +96,12 @@ pub fn run_turn(config: &Config, name: &str, opts: &RunOpts) -> Result<TurnResul
 
     let t0 = Instant::now();
     let active_session = agent.session_id.as_deref().filter(|s| !s.is_empty());
+
+    // Build session JSONL path for activity-based timeout extension
+    let session_jsonl = active_session.map(|sid| {
+        snapshot::session_dir(config).join(format!("{}.jsonl", sid))
+    });
+
     eprintln!(
         "[loom {}] turn {}: agent={} model={} system={} {} timeout={}s sys_prompt={} chars msg={} chars",
         crate::version(),
@@ -109,12 +115,12 @@ pub fn run_turn(config: &Config, name: &str, opts: &RunOpts) -> Result<TurnResul
         msg.len(),
     );
     let result = if let Some(sid) = active_session {
-        claude::claude_resume(config, sid, &msg, &sys_prompt, timeout)?
+        claude::claude_resume(config, sid, &msg, &sys_prompt, timeout, session_jsonl)?
     } else {
         // Save system prompt on first turn for this agent
         let sys_file = run_dir.join(format!("{}.system.md", speaker));
         std::fs::write(&sys_file, &sys_prompt)?;
-        claude::claude_new(config, &msg, &model, &sys_prompt, timeout)?
+        claude::claude_new(config, &msg, &model, &sys_prompt, timeout, None)?
     };
     let elapsed = t0.elapsed().as_secs_f64();
 
