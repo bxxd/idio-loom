@@ -1,4 +1,4 @@
-use idio_loom::{claude, config, meta, snapshot, thread};
+use idio_loom::{claude, config, meta, pattern, snapshot, thread};
 
 use anyhow::{bail, Result};
 use config::Config;
@@ -278,8 +278,13 @@ fn cmd_patterns(config: &Config, args: &[String]) -> Result<()> {
         entries.sort_by_key(|e| e.file_name());
         for entry in &entries {
             let name = entry.file_name().to_string_lossy().to_string();
-            let stem = name.trim_end_matches(".sh");
-            println!("  {}", stem);
+            let stem = name.trim_end_matches(".sh").trim_end_matches(".loom");
+            let kind = if name.ends_with(".loom") {
+                " (loom)"
+            } else {
+                ""
+            };
+            println!("  {}{}", stem, kind);
         }
         return Ok(());
     }
@@ -296,15 +301,19 @@ fn cmd_patterns(config: &Config, args: &[String]) -> Result<()> {
         }
         "run" => {
             let script = resolve_pattern(config, name)?;
-            let pass_through: Vec<&str> = args[2..].iter().map(|s| s.as_str()).collect();
-            let status = std::process::Command::new("bash")
-                .arg(&script)
-                .args(&pass_through)
-                .status()?;
-            if !status.success() {
-                bail!("script exited with {}", status);
+            if script.ends_with(".loom") {
+                run_loom_pattern(config, &script, &args[2..])
+            } else {
+                let pass_through: Vec<&str> = args[2..].iter().map(|s| s.as_str()).collect();
+                let status = std::process::Command::new("bash")
+                    .arg(&script)
+                    .args(&pass_through)
+                    .status()?;
+                if !status.success() {
+                    bail!("script exited with {}", status);
+                }
+                Ok(())
             }
-            Ok(())
         }
         _ => bail!(
             "unknown patterns command '{}' -- try: loom p <name> [show|run]",
@@ -319,11 +328,54 @@ fn resolve_pattern(config: &Config, name: &str) -> Result<String> {
     if exact.is_file() {
         return Ok(exact.to_string_lossy().to_string());
     }
+    // Prefer .loom over .sh when name is bare
+    let with_loom = dir.join(format!("{}.loom", name));
+    if with_loom.is_file() {
+        return Ok(with_loom.to_string_lossy().to_string());
+    }
     let with_sh = dir.join(format!("{}.sh", name));
     if with_sh.is_file() {
         return Ok(with_sh.to_string_lossy().to_string());
     }
     bail!("pattern '{}' not found in {}", name, dir.display())
+}
+
+/// Run a .loom pattern file.
+fn run_loom_pattern(config: &Config, path: &str, args: &[String]) -> Result<()> {
+    let flags = extract_flags(args.to_vec());
+    let intake = flags.positional.first().map(|s| s.as_str()).unwrap_or("");
+    let model = flags.model.as_deref();
+
+    // Auto-generate thread name: p-{pattern_stem}-{N}
+    let stem = std::path::Path::new(path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("pattern");
+
+    let thread_name = if let Some(ref name) = flags.dir {
+        name.clone()
+    } else {
+        let mut i = 1;
+        loop {
+            let candidate = format!("p-{}-{}", stem, i);
+            let run_dir = Meta::run_dir(config, &candidate);
+            if !run_dir.exists() {
+                break candidate;
+            }
+            i += 1;
+        }
+    };
+
+    eprintln!("[loom] pattern: {} → thread: {}", stem, thread_name);
+
+    let source = std::fs::read_to_string(path)?;
+    let vars = [
+        ("$INTAKE", intake),
+        ("$NAME", thread_name.as_str()),
+        ("$MODEL", model.unwrap_or("")),
+    ];
+    let prog = pattern::parse(&source, &vars)?;
+    pattern::execute(config, &thread_name, &prog, model, None)
 }
 
 fn cmd_agents(config: &Config, sub: Option<&str>) -> Result<()> {

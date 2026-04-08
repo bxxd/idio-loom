@@ -98,9 +98,8 @@ pub fn run_turn(config: &Config, name: &str, opts: &RunOpts) -> Result<TurnResul
     let active_session = agent.session_id.as_deref().filter(|s| !s.is_empty());
 
     // Build session JSONL path for activity-based timeout extension
-    let session_jsonl = active_session.map(|sid| {
-        snapshot::session_dir(config).join(format!("{}.jsonl", sid))
-    });
+    let session_jsonl =
+        active_session.map(|sid| snapshot::session_dir(config).join(format!("{}.jsonl", sid)));
 
     eprintln!(
         "[loom {}] turn {}: agent={} model={} system={} {} timeout={}s sys_prompt={} chars msg={} chars",

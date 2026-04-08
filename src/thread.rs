@@ -216,6 +216,55 @@ impl<'a> Thread<'a> {
     }
 }
 
+/// Thread summary for API consumers.
+#[derive(Debug, Clone)]
+pub struct ThreadInfo {
+    pub name: String,
+    pub turn_count: usize,
+    pub agents: Vec<String>,
+    pub elapsed_s: f64,
+    pub cost_usd: f64,
+    pub running: bool,
+}
+
+/// List all threads as structured data, sorted by most recent first.
+pub fn list_threads_info(config: &Config) -> Result<Vec<ThreadInfo>> {
+    let runs_dir = config.runs_dir();
+    if !runs_dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut entries: Vec<_> = std::fs::read_dir(&runs_dir)?
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().is_dir())
+        .collect();
+
+    entries.sort_by(|a, b| {
+        let ta = a.metadata().and_then(|m| m.modified()).ok();
+        let tb = b.metadata().and_then(|m| m.modified()).ok();
+        tb.cmp(&ta)
+    });
+
+    let mut result = Vec::new();
+    for entry in &entries {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if let Ok(meta) = Meta::read(config, &name) {
+            let agents: Vec<String> = meta.agents.keys().cloned().collect();
+            let cost: f64 = meta.thread.iter().filter_map(|t| t.cost_usd).sum();
+            let elapsed: f64 = meta.thread.iter().map(|t| t.elapsed_s).sum();
+            result.push(ThreadInfo {
+                name,
+                turn_count: meta.thread.len(),
+                agents,
+                elapsed_s: elapsed,
+                cost_usd: cost,
+                running: meta.running.is_some(),
+            });
+        }
+    }
+    Ok(result)
+}
+
 /// List all threads. Returns formatted string.
 pub fn list_threads(config: &Config) -> Result<String> {
     let runs_dir = config.runs_dir();
