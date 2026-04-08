@@ -55,6 +55,21 @@ pub struct Agent {
     pub system_prompt: String,
 }
 
+/// Agent info for API consumers.
+#[derive(Debug, Clone)]
+pub struct AgentInfo {
+    pub name: String,
+    pub model: String,
+}
+
+/// Pattern info for API consumers.
+#[derive(Debug, Clone)]
+pub struct PatternInfo {
+    pub name: String,
+    pub steps: usize,
+    pub source: String,
+}
+
 impl Config {
     /// Load config from loom.yaml. Looks in dir_override, else cwd.
     pub fn load(dir_override: Option<&str>) -> Result<Self> {
@@ -123,6 +138,39 @@ impl Config {
         Ok(())
     }
 
+    /// Load additional agents from a directory, merging into agents_map.
+    /// Existing agents are NOT overwritten — system agents take precedence.
+    /// Returns the number of agents added.
+    pub fn load_extra_agents(&mut self, dir: &Path) -> Result<usize> {
+        if !dir.exists() {
+            return Ok(0);
+        }
+        let mut count = 0;
+        for entry in std::fs::read_dir(dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().to_string();
+            if !name.ends_with(".yaml") && !name.ends_with(".yml") {
+                continue;
+            }
+            let agent_name = name
+                .trim_end_matches(".yaml")
+                .trim_end_matches(".yml")
+                .to_string();
+            // Skip if a system agent with the same name exists
+            if self.agents_map.contains_key(&agent_name) {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path)
+                .with_context(|| format!("reading user agent: {}", path.display()))?;
+            let agent: Agent = serde_yaml::from_str(&text)
+                .with_context(|| format!("parsing user agent: {}", path.display()))?;
+            self.agents_map.insert(agent_name, agent);
+            count += 1;
+        }
+        Ok(count)
+    }
+
     /// Workshop directory — where content lives (agents, patterns)
     pub fn workshop_dir(&self) -> PathBuf {
         self.resolve_path(&self.workshop)
@@ -153,6 +201,66 @@ impl Config {
         // Canonicalize to get the true absolute path (resolves .., symlinks)
         // so claude's project hash matches what we expect
         resolved.canonicalize().unwrap_or(resolved)
+    }
+
+    /// List agents as structured data.
+    pub fn agents(&self) -> Vec<AgentInfo> {
+        let mut result: Vec<AgentInfo> = self
+            .agents_map
+            .iter()
+            .map(|(name, agent)| AgentInfo {
+                name: name.clone(),
+                model: agent.model.clone().unwrap_or_else(|| self.model.clone()),
+            })
+            .collect();
+        result.sort_by(|a, b| a.name.cmp(&b.name));
+        result
+    }
+
+    /// List pattern files (.loom and .yaml) as structured data.
+    pub fn list_patterns(&self) -> Vec<PatternInfo> {
+        let dir = self.patterns_dir();
+        let mut result = Vec::new();
+        if !dir.is_dir() {
+            return result;
+        }
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            return result;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+            match ext {
+                "loom" => {
+                    let name = path
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let source = std::fs::read_to_string(&path).unwrap_or_default();
+                    let parsed = crate::pattern::parse(&source, &[]);
+                    let steps = parsed.as_ref().map(|p| p.steps.len()).unwrap_or(0);
+                    result.push(PatternInfo {
+                        name,
+                        steps,
+                        source,
+                    });
+                }
+                "yaml" | "yml" => {
+                    let source = std::fs::read_to_string(&path).unwrap_or_default();
+                    if let Ok(def) = crate::pattern::PatternDef::from_yaml(&source) {
+                        result.push(PatternInfo {
+                            name: def.name.clone(),
+                            steps: def.steps.len(),
+                            source,
+                        });
+                    }
+                }
+                _ => {}
+            }
+        }
+        result.sort_by(|a, b| a.name.cmp(&b.name));
+        result
     }
 
     pub fn agent_model(&self, name: &str) -> String {

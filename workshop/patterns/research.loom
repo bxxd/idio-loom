@@ -1,0 +1,17 @@
+# research — axe-driven research with bobby review, axe writes memo
+#
+# Usage: loom p research run "what's happening with AVGO?" [--model opus]
+
+do axe "$INTAKE"                                                      @research
+do axe "what are the driving forward factors"                         @factors
+do axe "do a forward analysis"                                        @forward
+do axe "are there any threads you want to research — rabbit holes? do it"  @deep-dive
+
+---
+
+do bobby hears axe "attack this thesis. find gaps, check math, challenge assumptions."  @critique
+do axe hears bobby                                                    @rebuttal
+
+---
+
+do axe "write the memo" use writer                                    @memo

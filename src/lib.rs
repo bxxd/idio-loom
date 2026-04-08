@@ -2,6 +2,7 @@ pub mod claude;
 pub mod config;
 pub mod loom;
 pub mod meta;
+pub mod pattern;
 pub mod snapshot;
 pub mod thread;
 

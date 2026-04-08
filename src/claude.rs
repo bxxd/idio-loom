@@ -187,7 +187,9 @@ fn run_claude_cmd(
                     // Hard cap — kill no matter what
                     if elapsed > max_timeout {
                         let pid = child.id() as i32;
-                        unsafe { libc::kill(-pid, libc::SIGKILL); }
+                        unsafe {
+                            libc::kill(-pid, libc::SIGKILL);
+                        }
                         let _ = child.wait();
                         bail!("claude hit max timeout after {}s", elapsed);
                     }
@@ -212,7 +214,9 @@ fn run_claude_cmd(
 
                     // Kill the process group
                     let pid = child.id() as i32;
-                    unsafe { libc::kill(-pid, libc::SIGKILL); }
+                    unsafe {
+                        libc::kill(-pid, libc::SIGKILL);
+                    }
                     let _ = child.wait();
                     bail!("claude timed out after {}s", elapsed);
                 }

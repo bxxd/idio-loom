@@ -1,0 +1,21 @@
+# idio3 — multi-turn research: axe research, bobby review, publish
+#
+# The idiobook request pipeline pattern.
+# Usage: loom p idio3 run "Research AVGO earnings" [--model opus]
+
+do axe "$INTAKE"                                                      @research-intake
+do axe "what are the driving forward factors decomposition"           @factor-decomposition
+do axe "do a forward alpha calculation"                               @forward-alpha
+do axe "what is the market implied probability"                       @market-implied-probability
+
+---
+
+do axe "are there any threads you want to research — rabbit holes? do it"  @deep-dive
+do axe "insider analysis. who is buying and selling? what are the patterns? what does it tell us about the thesis?"  @insider-analysis
+do bobby hears axe "attack this thesis. find gaps, check math, challenge assumptions."  @bobby-review
+do axe hears bobby                                                    @addressing-critique
+
+---
+
+do axe "write a draft to ibook. use draft id: $NAME." use writer      @writing-draft
+do publisher hears axe "publish this"                                 @publishing
