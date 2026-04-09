@@ -26,7 +26,7 @@
 //!
 //! Variables: $INTAKE, $NAME, $MODEL (substituted at parse/convert time)
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::config::Config;
@@ -95,26 +95,27 @@ impl PatternDef {
     }
 
     /// Convert to executable Pattern, applying variable substitutions.
+    ///
+    /// Variables are substituted in every string field, matching the .loom text
+    /// parser which replaces vars over the entire source before tokenizing.
     pub fn to_pattern(&self, vars: &[(&str, &str)]) -> Pattern {
+        let sub = |text: &str| -> String {
+            let mut out = text.to_string();
+            for (name, value) in vars {
+                out = out.replace(name, value);
+            }
+            out
+        };
         let steps = self
             .steps
             .iter()
-            .map(|s| {
-                let nudge = s.nudge.as_ref().map(|n| {
-                    let mut text = n.clone();
-                    for (name, value) in vars {
-                        text = text.replace(name, value);
-                    }
-                    text
-                });
-                Step {
-                    agent: s.agent.clone(),
-                    nudge,
-                    source: s.hears.clone(),
-                    system: s.use_system.clone(),
-                    stage: s.stage.clone(),
-                    model: s.model.clone(),
-                }
+            .map(|s| Step {
+                agent: sub(&s.agent),
+                nudge: s.nudge.as_deref().map(&sub),
+                source: s.hears.as_deref().map(&sub),
+                system: s.use_system.as_deref().map(&sub),
+                stage: s.stage.as_deref().map(&sub),
+                model: s.model.as_deref().map(&sub),
             })
             .collect();
         Pattern { steps }
@@ -155,14 +156,13 @@ impl PatternDef {
 // =============================================================================
 
 /// Parse a .loom text pattern file.
+///
+/// Variable substitution is applied after tokenization, on each token value.
+/// This prevents values containing `"`, `\n`, or `@` from corrupting the
+/// tokenizer / stage extractor — the parser only ever sees the literal source.
 pub fn parse(source: &str, vars: &[(&str, &str)]) -> Result<Pattern> {
-    let mut text = source.to_string();
-    for (name, value) in vars {
-        text = text.replace(name, value);
-    }
-
     let mut steps = Vec::new();
-    for (line_num, raw_line) in text.lines().enumerate() {
+    for (line_num, raw_line) in source.lines().enumerate() {
         let line = raw_line.trim();
 
         // Skip blanks, comments, and legacy gate markers
@@ -178,21 +178,30 @@ pub fn parse(source: &str, vars: &[(&str, &str)]) -> Result<Pattern> {
             );
         }
 
-        steps.push(parse_do(line, line_num + 1)?);
+        steps.push(parse_do(line, line_num + 1, vars)?);
     }
 
     Ok(Pattern { steps })
 }
 
 /// Parse a `do` instruction line.
-fn parse_do(line: &str, line_num: usize) -> Result<Step> {
+fn parse_do(line: &str, line_num: usize, vars: &[(&str, &str)]) -> Result<Step> {
+    let sub = |text: &str| -> String {
+        let mut out = text.to_string();
+        for (name, value) in vars {
+            out = out.replace(name, value);
+        }
+        out
+    };
+
     let (line, stage) = extract_stage(line);
-    let tokens = tokenize(&line)?;
+    let stage = stage.as_deref().map(&sub);
+    let tokens = tokenize(&line).with_context(|| format!("line {}", line_num))?;
     if tokens.len() < 2 {
         bail!("line {}: 'do' requires at least an agent name", line_num);
     }
 
-    let agent = tokens[1].clone();
+    let agent = sub(&tokens[1]);
     let mut nudge = None;
     let mut source = None;
     let mut system = None;
@@ -204,21 +213,21 @@ fn parse_do(line: &str, line_num: usize) -> Result<Step> {
                 if i + 1 >= tokens.len() {
                     bail!("line {}: 'hears' requires a source agent", line_num);
                 }
-                source = Some(tokens[i + 1].clone());
+                source = Some(sub(&tokens[i + 1]));
                 i += 2;
             }
             "use" => {
                 if i + 1 >= tokens.len() {
                     bail!("line {}: 'use' requires a system agent", line_num);
                 }
-                system = Some(tokens[i + 1].clone());
+                system = Some(sub(&tokens[i + 1]));
                 i += 2;
             }
             _ => {
                 if nudge.is_some() {
                     bail!("line {}: unexpected token '{}'", line_num, tokens[i]);
                 }
-                nudge = Some(tokens[i].clone());
+                nudge = Some(sub(&tokens[i]));
                 i += 1;
             }
         }
@@ -318,7 +327,15 @@ pub fn execute(
             step.nudge
                 .as_ref()
                 .map(|n| {
-                    let preview = if n.len() > 60 { &n[..60] } else { n };
+                    let preview = if n.len() > 60 {
+                        let mut e = 60;
+                        while !n.is_char_boundary(e) {
+                            e -= 1;
+                        }
+                        &n[..e]
+                    } else {
+                        n
+                    };
                     format!(" \"{}\"", preview)
                 })
                 .unwrap_or_default(),
@@ -408,6 +425,33 @@ do axe "write memo" use writer  @memo
     }
 
     #[test]
+    fn parse_variable_with_double_quotes() {
+        // Var values containing `"` must not corrupt tokenization —
+        // substitution happens after tokenizing.
+        let src = r#"do axe "$INTAKE"  @start"#;
+        let p = parse(src, &[("$INTAKE", r#"he said "hi""#)]).unwrap();
+        assert_eq!(p.steps[0].nudge.as_deref(), Some(r#"he said "hi""#));
+        assert_eq!(p.steps[0].stage.as_deref(), Some("start"));
+    }
+
+    #[test]
+    fn parse_variable_with_newline() {
+        // Multi-line var values must not be split across source lines.
+        let src = r#"do axe "$INTAKE"  @start"#;
+        let p = parse(src, &[("$INTAKE", "line1\nline2")]).unwrap();
+        assert_eq!(p.steps[0].nudge.as_deref(), Some("line1\nline2"));
+    }
+
+    #[test]
+    fn parse_variable_with_at_sign() {
+        // `@` in var values must not be mistaken for a stage marker.
+        let src = r#"do axe "$INTAKE"  @start"#;
+        let p = parse(src, &[("$INTAKE", "mention @alice")]).unwrap();
+        assert_eq!(p.steps[0].nudge.as_deref(), Some("mention @alice"));
+        assert_eq!(p.steps[0].stage.as_deref(), Some("start"));
+    }
+
+    #[test]
     fn parse_hears_all() {
         let src = r#"do writer hears all "write the report""#;
         let p = parse(src, &[]).unwrap();
@@ -428,6 +472,20 @@ do axe "write memo" use writer  @memo
     #[test]
     fn parse_error_missing_do() {
         assert!(parse("axe hello", &[]).is_err());
+    }
+
+    #[test]
+    fn parse_error_unterminated_quote_has_line_num() {
+        // Line 2 has an unterminated quote — error should mention the line.
+        let src = "do axe \"ok\"\ndo bobby \"oops\ndo cat \"fine\"";
+        let err = parse(src, &[]).unwrap_err();
+        let msg = format!("{:#}", err);
+        assert!(msg.contains("line 2"), "error missing line number: {}", msg);
+        assert!(
+            msg.contains("unterminated quote"),
+            "error missing cause: {}",
+            msg
+        );
     }
 
     #[test]
@@ -493,6 +551,30 @@ steps:
         };
         let pattern = def.to_pattern(&[("$INTAKE", "analyze NVDA")]);
         assert_eq!(pattern.steps[0].nudge.as_deref(), Some("analyze NVDA"));
+    }
+
+    #[test]
+    fn yaml_to_pattern_substitutes_all_fields() {
+        // Matches .loom text parser: vars substitute in every string field.
+        let def = PatternDef {
+            name: "test".to_string(),
+            description: String::new(),
+            steps: vec![StepDef {
+                agent: "axe".to_string(),
+                nudge: Some("write draft id: $NAME".to_string()),
+                hears: None,
+                use_system: None,
+                stage: Some("stage-$NAME".to_string()),
+                model: Some("$MODEL".to_string()),
+            }],
+        };
+        let pattern = def.to_pattern(&[("$NAME", "abc"), ("$MODEL", "haiku")]);
+        assert_eq!(
+            pattern.steps[0].nudge.as_deref(),
+            Some("write draft id: abc")
+        );
+        assert_eq!(pattern.steps[0].stage.as_deref(), Some("stage-abc"));
+        assert_eq!(pattern.steps[0].model.as_deref(), Some("haiku"));
     }
 
     #[test]

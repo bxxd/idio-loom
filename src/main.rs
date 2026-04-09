@@ -341,10 +341,13 @@ fn resolve_pattern(config: &Config, name: &str) -> Result<String> {
 }
 
 /// Run a .loom pattern file.
+///
+/// `args` arrives stripped of CLI flags (top-level `extract_flags` consumes
+/// them), so only positional tokens are present — the first one is the intake.
+/// Overrides like `--model` are not currently threaded through here; `$MODEL`
+/// substitutes to the empty string.
 fn run_loom_pattern(config: &Config, path: &str, args: &[String]) -> Result<()> {
-    let flags = extract_flags(args.to_vec());
-    let intake = flags.positional.first().map(|s| s.as_str()).unwrap_or("");
-    let model = flags.model.as_deref();
+    let intake = args.first().map(|s| s.as_str()).unwrap_or("");
 
     // Auto-generate thread name: p-{pattern_stem}-{N}
     let stem = std::path::Path::new(path)
@@ -352,18 +355,14 @@ fn run_loom_pattern(config: &Config, path: &str, args: &[String]) -> Result<()> 
         .and_then(|s| s.to_str())
         .unwrap_or("pattern");
 
-    let thread_name = if let Some(ref name) = flags.dir {
-        name.clone()
-    } else {
-        let mut i = 1;
-        loop {
-            let candidate = format!("p-{}-{}", stem, i);
-            let run_dir = Meta::run_dir(config, &candidate);
-            if !run_dir.exists() {
-                break candidate;
-            }
-            i += 1;
+    let mut i = 1;
+    let thread_name = loop {
+        let candidate = format!("p-{}-{}", stem, i);
+        let run_dir = Meta::run_dir(config, &candidate);
+        if !run_dir.exists() {
+            break candidate;
         }
+        i += 1;
     };
 
     eprintln!("[loom] pattern: {} → thread: {}", stem, thread_name);
@@ -372,10 +371,10 @@ fn run_loom_pattern(config: &Config, path: &str, args: &[String]) -> Result<()> 
     let vars = [
         ("$INTAKE", intake),
         ("$NAME", thread_name.as_str()),
-        ("$MODEL", model.unwrap_or("")),
+        ("$MODEL", ""),
     ];
     let prog = pattern::parse(&source, &vars)?;
-    pattern::execute(config, &thread_name, &prog, model, None)
+    pattern::execute(config, &thread_name, &prog, None, None)
 }
 
 fn cmd_agents(config: &Config, sub: Option<&str>) -> Result<()> {

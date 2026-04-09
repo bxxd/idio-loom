@@ -249,7 +249,8 @@ pub fn list_threads_info(config: &Config) -> Result<Vec<ThreadInfo>> {
     for entry in &entries {
         let name = entry.file_name().to_string_lossy().to_string();
         if let Ok(meta) = Meta::read(config, &name) {
-            let agents: Vec<String> = meta.agents.keys().cloned().collect();
+            let mut agents: Vec<String> = meta.agents.keys().cloned().collect();
+            agents.sort();
             let cost: f64 = meta.thread.iter().filter_map(|t| t.cost_usd).sum();
             let elapsed: f64 = meta.thread.iter().map(|t| t.elapsed_s).sum();
             result.push(ThreadInfo {
