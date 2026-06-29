@@ -129,10 +129,6 @@ impl Backend for ClaudeBackend {
         })
     }
 
-    fn transcript_path(&self, config: &Config, session_id: &str) -> Option<PathBuf> {
-        Some(Self::session_dir(config).join(format!("{}.jsonl", session_id)))
-    }
-
     fn snapshot_session(
         &self,
         config: &Config,

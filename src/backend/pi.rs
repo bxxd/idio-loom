@@ -142,10 +142,6 @@ impl Backend for PiBackend {
         })
     }
 
-    fn transcript_path(&self, config: &Config, session_id: &str) -> Option<PathBuf> {
-        Self::find_transcript(config, session_id)
-    }
-
     fn snapshot_session(
         &self,
         config: &Config,

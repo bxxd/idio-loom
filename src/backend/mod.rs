@@ -62,11 +62,6 @@ pub trait Backend {
     /// Execute one turn.
     fn run_turn(&self, config: &Config, req: &TurnRequest) -> Result<TurnOutcome>;
 
-    /// Absolute path to the transcript file backing `session_id`, if this
-    /// backend stores one. Used by the timeout watchdog as an activity probe
-    /// and by snapshotting. `None` means "no on-disk transcript to track".
-    fn transcript_path(&self, config: &Config, session_id: &str) -> Option<std::path::PathBuf>;
-
     /// Copy this backend's live transcript for `session_id` **into** the
     /// snapshot directory, keyed by `agent`. Best-effort: warn, don't fail.
     fn snapshot_session(
