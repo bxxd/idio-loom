@@ -6,6 +6,9 @@ use std::path::{Path, PathBuf};
 fn default_model() -> String {
     "sonnet".into()
 }
+fn default_backend() -> String {
+    "claude".into()
+}
 fn default_timeout() -> u64 {
     900
 }
@@ -24,6 +27,12 @@ pub(crate) fn default_true() -> bool {
 pub struct Config {
     #[serde(default = "default_model")]
     pub model: String,
+    /// Which agent backend executes turns: `"claude"` (default) or `"pi"`.
+    #[serde(default = "default_backend")]
+    pub backend: String,
+    /// Optional override for the backend's binary path/name (e.g. `"vizipi"`).
+    #[serde(default)]
+    pub backend_bin: Option<String>,
     #[serde(default = "default_timeout")]
     pub timeout: u64,
     #[serde(default = "default_workshop")]

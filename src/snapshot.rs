@@ -2,70 +2,28 @@ use anyhow::{bail, Result};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use crate::backend::{self, Backend};
 use crate::config::Config;
 use crate::meta::{AgentState, Meta};
 
-pub(crate) fn session_dir(config: &Config) -> PathBuf {
-    let cwd = config.claude_cwd();
-    let slug = cwd.to_string_lossy().replace('/', "-");
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
-    PathBuf::from(home)
-        .join(".claude")
-        .join("projects")
-        .join(slug)
-}
-
-/// Copy session JSONLs for all agents between a sessions dir and claude's project dir.
-/// direction: Save = project → snapshot, Restore = snapshot → project.
+/// Copy session transcripts for all agents between a snapshot dir and the
+/// backend's live location. Direction picks save (live → snapshot) vs restore
+/// (snapshot → live). The backend owns where its transcripts live.
 fn sync_sessions(
     config: &Config,
+    backend: &dyn Backend,
     agents: &HashMap<String, AgentState>,
     sessions_dir: &Path,
     direction: Direction,
 ) -> Result<()> {
-    let sess_base = session_dir(config);
-
     for (agent_name, agent) in agents {
         if let Some(ref sid) = agent.session_id {
-            let project_jsonl = sess_base.join(format!("{}.jsonl", sid));
-            let snap_jsonl = sessions_dir.join(format!("{}.jsonl", agent_name));
-            let project_sub = sess_base.join(sid);
-            let snap_sub = sessions_dir.join(agent_name);
-
             match direction {
                 Direction::Save => {
-                    if project_jsonl.exists() {
-                        std::fs::copy(&project_jsonl, &snap_jsonl)?;
-                        eprintln!("  session saved: {} ({})", agent_name, sid);
-                    } else {
-                        eprintln!(
-                            "  WARNING: session file missing for {}: {}",
-                            agent_name,
-                            project_jsonl.display()
-                        );
-                    }
-                    if project_sub.exists() && project_sub.is_dir() {
-                        copy_dir_recursive(&project_sub, &snap_sub)?;
-                        eprintln!("  subagents saved: {}", agent_name);
-                    }
+                    backend.snapshot_session(config, agent_name, sid, sessions_dir)?
                 }
                 Direction::Restore => {
-                    if snap_jsonl.exists() {
-                        std::fs::copy(&snap_jsonl, &project_jsonl)?;
-                        eprintln!("  session restored: {} ({})", agent_name, sid);
-                    } else {
-                        eprintln!(
-                            "  WARNING: no session backup for {} — resume will fail",
-                            agent_name
-                        );
-                    }
-                    if snap_sub.exists() && snap_sub.is_dir() {
-                        if project_sub.exists() {
-                            std::fs::remove_dir_all(&project_sub)?;
-                        }
-                        copy_dir_recursive(&snap_sub, &project_sub)?;
-                        eprintln!("  subagents restored: {}", agent_name);
-                    }
+                    backend.restore_session(config, agent_name, sid, sessions_dir)?
                 }
             }
         }
@@ -98,10 +56,17 @@ pub fn auto_snapshot(config: &Config, name: &str, meta: &Meta) -> Result<()> {
     // Copy run state (everything except snapshots/)
     copy_run_state(&run_dir, &snap)?;
 
-    // Copy session JSONLs
+    // Copy session transcripts via the backend
     let sessions_dir = snap.join("sessions");
     std::fs::create_dir_all(&sessions_dir)?;
-    sync_sessions(config, &meta.agents, &sessions_dir, Direction::Save)?;
+    let backend = backend::for_config(config)?;
+    sync_sessions(
+        config,
+        backend.as_ref(),
+        &meta.agents,
+        &sessions_dir,
+        Direction::Save,
+    )?;
 
     eprintln!("  snapshot: snap-{}-{}", n, last_agent);
     Ok(())
@@ -139,11 +104,18 @@ pub fn rewind(config: &Config, name: &str, snap_n: &str) -> Result<()> {
         }
     }
 
-    // Restore session JSONLs
+    // Restore session transcripts via the backend
     let sessions = snap.join("sessions");
     if sessions.exists() {
         let meta = Meta::read(config, name)?;
-        sync_sessions(config, &meta.agents, &sessions, Direction::Restore)?;
+        let backend = backend::for_config(config)?;
+        sync_sessions(
+            config,
+            backend.as_ref(),
+            &meta.agents,
+            &sessions,
+            Direction::Restore,
+        )?;
     }
 
     eprintln!("rewound to {}", snap.file_name().unwrap().to_string_lossy());
@@ -166,19 +138,12 @@ fn find_snapshot(snap_dir: &Path, target: &str) -> Result<PathBuf> {
     bail!("snapshot {} not found", target);
 }
 
-/// Remove session JSONLs from claude's project dir for all agents in this run
+/// Remove backend transcripts for all agents in this run (for delete/reset).
 pub fn cleanup_sessions(config: &Config, meta: &Meta) -> Result<()> {
-    let sess_base = session_dir(config);
+    let backend = backend::for_config(config)?;
     for agent in meta.agents.values() {
         if let Some(ref sid) = agent.session_id {
-            let jsonl = sess_base.join(format!("{}.jsonl", sid));
-            if jsonl.exists() {
-                std::fs::remove_file(&jsonl)?;
-            }
-            let sub = sess_base.join(sid);
-            if sub.exists() && sub.is_dir() {
-                std::fs::remove_dir_all(&sub)?;
-            }
+            backend.cleanup_session(config, sid)?;
         }
     }
     Ok(())

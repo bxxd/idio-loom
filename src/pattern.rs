@@ -33,6 +33,10 @@ use crate::config::Config;
 use crate::loom::RunOpts;
 use crate::thread::Thread;
 
+/// Hook invoked before each pattern step. Return `Err` to abort (e.g. on
+/// cancellation). Borrowed so callers can pass a closure capturing local state.
+pub type BeforeTurnHook<'a> = dyn Fn(usize, &Step) -> Result<()> + 'a;
+
 // =============================================================================
 // Core types
 // =============================================================================
@@ -139,10 +143,12 @@ impl PatternDef {
         }
 
         // At least one step must consume $INTAKE — otherwise the user's request is ignored
-        let has_intake = self
-            .steps
-            .iter()
-            .any(|s| s.nudge.as_deref().map(|n| n.contains("$INTAKE")).unwrap_or(false));
+        let has_intake = self.steps.iter().any(|s| {
+            s.nudge
+                .as_deref()
+                .map(|n| n.contains("$INTAKE"))
+                .unwrap_or(false)
+        });
         if !has_intake {
             bail!("pattern must include $INTAKE in at least one step's nudge — otherwise the user's request is ignored");
         }
@@ -305,7 +311,7 @@ pub fn execute(
     name: &str,
     pattern: &Pattern,
     model: Option<&str>,
-    on_before_turn: Option<&dyn Fn(usize, &Step) -> Result<()>>,
+    on_before_turn: Option<&BeforeTurnHook>,
 ) -> Result<()> {
     let thread = Thread::new(config, name);
 

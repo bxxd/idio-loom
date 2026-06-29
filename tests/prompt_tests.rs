@@ -1,4 +1,4 @@
-use idio_loom::claude::resolve_at_refs;
+use idio_loom::prompt::resolve_at_refs;
 use std::fs;
 use tempfile::TempDir;
 

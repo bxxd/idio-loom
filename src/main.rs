@@ -1,4 +1,4 @@
-use idio_loom::{claude, config, meta, pattern, snapshot, thread};
+use idio_loom::{config, meta, pattern, prompt, snapshot, thread};
 
 use anyhow::{bail, Result};
 use config::Config;
@@ -398,7 +398,7 @@ fn cmd_agents(config: &Config, sub: Option<&str>) -> Result<()> {
         let agent = &config.agents_map[*name];
         let model = agent.model.as_deref().unwrap_or(&config.model);
         println!("  {}  ({})", name, model);
-        let resolved = claude::resolve_at_refs(&agent.system_prompt, &config.agents_dir());
+        let resolved = prompt::resolve_at_refs(&agent.system_prompt, &config.agents_dir());
         let preview: String = resolved
             .trim()
             .lines()
@@ -427,7 +427,7 @@ fn show_agent(config: &Config, name: &str) -> Result<()> {
     println!("  model: {}", model);
     println!("  source: {}", agent.system_prompt.trim());
 
-    let resolved = claude::resolve_at_refs(&agent.system_prompt, &config.agents_dir());
+    let resolved = prompt::resolve_at_refs(&agent.system_prompt, &config.agents_dir());
     println!();
     for line in resolved.trim().lines() {
         println!("  {}", line);
@@ -450,7 +450,7 @@ fn cmd_init(flags: &Flags) -> Result<()> {
     if yaml_path.exists() && !flags.force {
         eprintln!("loom.yaml already exists -- use --force to overwrite");
     } else {
-        let content = "model: sonnet\ntimeout: 900\nworkshop: .\nsnapshots: true\n";
+        let content = "model: sonnet\nbackend: claude   # claude | pi\ntimeout: 900\nworkshop: .\nsnapshots: true\n";
         std::fs::write(&yaml_path, content)?;
         eprintln!("wrote {}", yaml_path.display());
     }
