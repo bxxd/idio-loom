@@ -1,9 +1,10 @@
 use anyhow::{bail, Context, Result};
 use std::time::Instant;
 
-use crate::claude;
+use crate::backend::{self, TurnRequest};
 use crate::config::Config;
 use crate::meta::{Meta, RunningTurn, Turn};
+use crate::prompt;
 use crate::snapshot;
 
 /// Options for running a turn.
@@ -92,19 +93,18 @@ pub fn run_turn(config: &Config, name: &str, opts: &RunOpts) -> Result<TurnResul
     let scratchpad_dir = run_dir.join("scratchpad");
     let prompt_agent = system_override.unwrap_or(speaker);
     let sys_prompt =
-        claude::build_system_prompt(config, config.agent(prompt_agent), &scratchpad_dir);
+        prompt::build_system_prompt(config, config.agent(prompt_agent), &scratchpad_dir);
+
+    let backend = backend::for_config(config)?;
 
     let t0 = Instant::now();
     let active_session = agent.session_id.as_deref().filter(|s| !s.is_empty());
 
-    // Build session JSONL path for activity-based timeout extension
-    let session_jsonl =
-        active_session.map(|sid| snapshot::session_dir(config).join(format!("{}.jsonl", sid)));
-
     eprintln!(
-        "[loom {}] turn {}: agent={} model={} system={} {} timeout={}s sys_prompt={} chars msg={} chars",
+        "[loom {}] turn {}: backend={} agent={} model={} system={} {} timeout={}s sys_prompt={} chars msg={} chars",
         crate::version(),
         turn_n,
+        backend.name(),
         speaker,
         model,
         system_override.unwrap_or("(self)"),
@@ -113,14 +113,24 @@ pub fn run_turn(config: &Config, name: &str, opts: &RunOpts) -> Result<TurnResul
         sys_prompt.len(),
         msg.len(),
     );
-    let result = if let Some(sid) = active_session {
-        claude::claude_resume(config, sid, &msg, &sys_prompt, timeout, session_jsonl)?
-    } else {
-        // Save system prompt on first turn for this agent
+
+    // Save system prompt on first turn for this agent.
+    if active_session.is_none() {
         let sys_file = run_dir.join(format!("{}.system.md", speaker));
         std::fs::write(&sys_file, &sys_prompt)?;
-        claude::claude_new(config, &msg, &model, &sys_prompt, timeout, None)?
-    };
+    }
+
+    let result = backend.run_turn(
+        config,
+        &TurnRequest {
+            agent: speaker,
+            message: &msg,
+            model: &model,
+            system_prompt: &sys_prompt,
+            session_id: active_session,
+            timeout_secs: timeout,
+        },
+    )?;
     let elapsed = t0.elapsed().as_secs_f64();
 
     // Update state
@@ -128,7 +138,7 @@ pub fn run_turn(config: &Config, name: &str, opts: &RunOpts) -> Result<TurnResul
     let input_file = run_dir.join(format!("turn-{}-{}.input.md", turn_n, speaker));
     std::fs::write(&input_file, &msg)?;
     let turn_file = Meta::turn_file(config, name, turn_n, speaker);
-    std::fs::write(&turn_file, &result.result)?;
+    std::fs::write(&turn_file, &result.output)?;
 
     // Write .last_output for script consumption
     let last_output = run_dir.join(".last_output");
@@ -142,7 +152,7 @@ pub fn run_turn(config: &Config, name: &str, opts: &RunOpts) -> Result<TurnResul
         nudge: nudge.map(String::from),
         stage: opts.stage.map(String::from),
         model: Some(model.clone()),
-        chars: result.result.len(),
+        chars: result.output.len(),
         elapsed_s: (elapsed * 10.0).round() / 10.0,
         cost_usd: result.cost_usd,
     });
@@ -153,7 +163,7 @@ pub fn run_turn(config: &Config, name: &str, opts: &RunOpts) -> Result<TurnResul
     }
 
     Ok(TurnResult {
-        output: result.result,
+        output: result.output,
         session_id: result.session_id,
         elapsed_s: (elapsed * 10.0).round() / 10.0,
         cost_usd: result.cost_usd,

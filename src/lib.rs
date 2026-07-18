@@ -1,8 +1,10 @@
-pub mod claude;
+pub mod backend;
 pub mod config;
+pub mod exec;
 pub mod loom;
 pub mod meta;
 pub mod pattern;
+pub mod prompt;
 pub mod snapshot;
 pub mod thread;
 

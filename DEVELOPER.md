@@ -24,34 +24,66 @@ src/
   main.rs       CLI adapter — arg parsing, display, patterns, agents, init
   config.rs     loom.yaml loading, agent scanning, path resolution
   meta.rs       meta.json types (Meta, AgentState, Turn), read/write
-  loom.rs       Turn execution: message building, claude invocation, state updates
-  claude.rs     Claude subprocess wrapper (new/resume), system prompt assembly, @file resolution
-  snapshot.rs   Snapshot/rewind with session JSONL sync
+  loom.rs       Turn execution: message building, backend dispatch, state updates
+  prompt.rs     System-prompt assembly + @file resolution (backend-agnostic)
+  exec.rs       Subprocess spawn + process-group timeout kill (backend-agnostic)
+  backend/
+    mod.rs      Backend trait (the port) + TurnRequest/TurnOutcome + factory
+    claude.rs   ClaudeBackend — `claude` CLI, ~/.claude/projects sessions
+    pi.rs       PiBackend — `pi`/vizipi CLI, loom-owned --session-dir
+  snapshot.rs   Snapshot/rewind; delegates session sync to the active Backend
 
 python/
   idio_loom/__init__.py   Python wrapper (subprocess over CLI)
   pyproject.toml          Package metadata
 ```
 
+### Backends (the agent port)
+
+Loom orchestrates *turns* and doesn't care which coding agent runs them. The
+`Backend` trait in `src/backend/mod.rs` is the port; each impl adapts one agent
+CLI. Pick one with `backend:` in `loom.yaml` (`claude` default, or `pi`).
+
+| Concern | `claude` | `pi` |
+|---------|----------|------|
+| Headless flag | `-p --output-format json` | `--print --mode text` |
+| Session id | claude assigns; loom reads it back | **loom assigns** via `--session-id` |
+| Resume | `--resume <id>` | re-pass `--session-id <id>` |
+| System prompt | `--append-system-prompt` | `--append-system-prompt` |
+| Transcript home | `~/.claude/projects/{slug}/{id}.jsonl` | loom-owned `{state}/pi-sessions/{ts}_{id}.jsonl` via `--session-dir` |
+| Binary override | (find ~/.local/bin/claude) | `backend_bin:` in loom.yaml (e.g. `vizipi`) |
+
+Because pi lets loom choose both the session id and the session directory, the
+pi snapshot/rewind path is simpler than claude's: no per-cwd slug to reverse
+engineer, no branding guesswork (`~/.pi` vs `~/.vizipi`). Snapshotting is "copy
+a file we already named."
+
+Adding a third backend = one file implementing `Backend` + one arm in
+`backend::for_config`. `loom.rs` and `snapshot.rs` never change.
+
 ### One True Path
 
 ```
-Thread::run_opts() → loom::run_turn() → claude::claude_new/resume()
-     ↑                                        ↑
-  CLI (main.rs)                          timeout enforcement
-  Rust crate dep                         (setsid + process group kill)
-  Python subprocess
+Thread::run_opts() → loom::run_turn() → backend.run_turn() → exec::run_with_timeout()
+     ↑                       │                  ↑                      ↑
+  CLI (main.rs)              │           Backend trait          timeout enforcement
+  Rust crate dep            │           (claude | pi)          (setsid + pgroup kill)
+  Python subprocess         └─ prompt::build_system_prompt()
 ```
 
 ### Module responsibilities
 
 - **thread.rs** — `run()`, `run_opts()`, `step()`, `last_output()`, `read_turn()`, `show()`, `rewind()`, `delete()`, `reset()`, `list_threads()`. Returns data, never prints.
 - **main.rs** — Arg parsing, display, patterns dispatch, agents listing, init. Calls `Thread` and prints.
-- **config.rs** — Loads `loom.yaml`, scans `agents/*.yaml` into `agents_map`. Path resolution methods. Pure config, no side effects.
+- **config.rs** — Loads `loom.yaml`, scans `agents/*.yaml` into `agents_map`. Owns `backend`/`backend_bin` fields. Path resolution methods. Pure config, no side effects.
 - **meta.rs** — `Meta::read()` (errors on missing), `Meta::read_or_create()` (manual mode), `Meta::save()`. Owns meta.json schema.
-- **loom.rs** — Builds messages from source/nudge, invokes claude, records turn, saves trace files. Returns `TurnResult` (output, session_id, elapsed, cost). One entry point: `run_turn()`. `hears all` filters self out and includes nudges.
-- **claude.rs** — `claude_new()` / `claude_resume()` / `build_system_prompt()`. Timeout via `setsid` + process group kill. `resolve_at_refs()` for `@file` expansion.
-- **snapshot.rs** — Captures/restores state + claude session JSONLs from `~/.claude/projects/`. `cleanup_sessions()` for delete/reset.
+- **loom.rs** — Builds messages from source/nudge, resolves the `Backend`, records turn, saves trace files. Returns `TurnResult` (output, session_id, elapsed, cost). One entry point: `run_turn()`. `hears all` filters self out and includes nudges.
+- **prompt.rs** — `build_system_prompt()` + `resolve_at_refs()` for `@file` expansion. Backend-agnostic.
+- **exec.rs** — `run_with_timeout()` (spawn, stdin feed, soft/hard timeout via `setsid` + process-group kill, activity probe), `log_command()`. Backend-agnostic.
+- **backend/mod.rs** — `Backend` trait (the port), `TurnRequest`/`TurnOutcome`, `for_config()` factory.
+- **backend/claude.rs** — `ClaudeBackend`: `claude` CLI in JSON mode, `~/.claude/projects/{slug}/` sessions + subagent dirs.
+- **backend/pi.rs** — `PiBackend`: `pi`/vizipi CLI in text mode, loom-owned `--session-dir`, loom-assigned `--session-id`.
+- **snapshot.rs** — Captures/restores state; delegates session-transcript sync to the active `Backend`. `cleanup_sessions()` for delete/reset.
 
 ### Path resolution
 
