@@ -64,6 +64,13 @@ pub fn run_with_timeout(
         .spawn()
         .context("failed to spawn backend process")?;
 
+    // Drain stdout/stderr on threads while the child runs. Reading only after
+    // exit deadlocks once output exceeds the OS pipe buffer (~64KB): the child
+    // blocks mid-write and never exits. Started before the stdin write so a
+    // child that interleaves output with reading its prompt can't wedge us.
+    let stdout_thread = drain(child.stdout.take());
+    let stderr_thread = drain(child.stderr.take());
+
     // Write the prompt to stdin, then close it.
     if let Some(mut stdin) = child.stdin.take() {
         use std::io::Write;
@@ -112,20 +119,26 @@ pub fn run_with_timeout(
         }
     }
 
-    let mut stdout_buf = Vec::new();
-    let mut stderr_buf = Vec::new();
-    if let Some(mut out) = child.stdout.take() {
-        out.read_to_end(&mut stdout_buf)?;
-    }
-    if let Some(mut err) = child.stderr.take() {
-        err.read_to_end(&mut stderr_buf)?;
-    }
     let status = child.wait()?;
+    let stdout_buf = stdout_thread.join().unwrap_or_default();
+    let stderr_buf = stderr_thread.join().unwrap_or_default();
 
     Ok(ExecOutput {
         stdout: String::from_utf8_lossy(&stdout_buf).to_string(),
         stderr: String::from_utf8_lossy(&stderr_buf).to_string(),
         success: status.success(),
+    })
+}
+
+/// Read a child pipe to EOF on a dedicated thread. On the timeout-kill paths
+/// the handle is never joined; the thread exits on its own at EOF.
+fn drain<R: Read + Send + 'static>(pipe: Option<R>) -> std::thread::JoinHandle<Vec<u8>> {
+    std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(mut pipe) = pipe {
+            let _ = pipe.read_to_end(&mut buf);
+        }
+        buf
     })
 }
 
