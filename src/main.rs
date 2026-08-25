@@ -163,12 +163,16 @@ fn thread_cmd(config: &Config, name: &str, args: &[String], flags: &Flags) -> Re
             let (source, positional_nudge) = parse_turn_args(remaining)?;
             let nudge = flags.nudge.as_deref().or(positional_nudge.as_deref());
 
-            // LOOM_MODEL env var as fallback for model override (for scripts)
+            // LOOM_MODEL env var as fallback for model override (for scripts).
+            // The harness marker (settings panel) sits below the explicit flag
+            // but above the checked-in loom.yaml default.
             let env_model = std::env::var("LOOM_MODEL").ok();
+            let harness_model = config.harness_model();
             let model_override = flags
                 .model
                 .as_deref()
                 .or(env_model.as_deref())
+                .or(harness_model.as_deref())
                 .filter(|s| !s.is_empty());
 
             let model_display = model_override
