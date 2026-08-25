@@ -4,3 +4,4 @@ python/build/
 python/*.egg-info/
 python/**/__pycache__/
 .loom_build_number
+workshop/

@@ -209,16 +209,31 @@ system_prompt: |
 ```yaml
 # loom.yaml
 model: sonnet              # default model
+backend: claude            # which agent runs turns: claude (default) or pi
+backend_bin: pi            # optional: override the backend binary (e.g. vizipi)
 timeout: 900               # turn timeout (seconds)
 workshop: .                # path to agents/ and patterns/
 state: .loom               # path to state dir
 snapshots: true            # auto-snapshot after each turn
-cwd: /some/path            # claude working directory (optional — picks up CLAUDE.md, .mcp.json)
+cwd: /some/path            # agent working directory (optional — picks up CLAUDE.md/AGENTS.md, .mcp.json)
 system_prompt: |           # appended to all agents (optional)
   Extra instructions here.
 ```
 
-The `cwd` field is key for tool access — point it at a directory with `.mcp.json` and your agents get MCP servers, file access, whatever Claude Code supports.
+The `cwd` field is key for tool access — point it at a directory with `.mcp.json` and your agents get MCP servers, file access, whatever the backend supports.
+
+## Backends
+
+Loom orchestrates *turns*; a **backend** is the coding-agent CLI that runs them.
+Pick one with `backend:` in `loom.yaml`.
+
+- **`claude`** (default) — drives the [Claude Code](https://docs.anthropic.com/en/docs/claude-code) CLI. Sessions live under `~/.claude/projects/`.
+- **`pi`** — drives [Pi](https://github.com/earendil-works/pi) (and downstream forks like vizipi; set `backend_bin: vizipi`). Loom assigns the session id (`--session-id`) and points pi at a loom-owned `--session-dir`, so snapshots/rewind need no per-cwd slug guesswork.
+
+The killer feature — **rewind that rolls back the agent's own memory** — works on
+both: loom snapshots the backend's session transcript after every turn and
+restores it on rewind. Adding a new backend is one file implementing the
+`Backend` trait (see `DEVELOPER.md`).
 
 ## Python library
 

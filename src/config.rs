@@ -6,6 +6,9 @@ use std::path::{Path, PathBuf};
 fn default_model() -> String {
     "sonnet".into()
 }
+fn default_backend() -> String {
+    "claude".into()
+}
 fn default_timeout() -> u64 {
     900
 }
@@ -24,6 +27,12 @@ pub(crate) fn default_true() -> bool {
 pub struct Config {
     #[serde(default = "default_model")]
     pub model: String,
+    /// Which agent backend executes turns: `"claude"` (default) or `"pi"`.
+    #[serde(default = "default_backend")]
+    pub backend: String,
+    /// Optional override for the backend's binary path/name (e.g. `"vizipi"`).
+    #[serde(default)]
+    pub backend_bin: Option<String>,
     #[serde(default = "default_timeout")]
     pub timeout: u64,
     #[serde(default = "default_workshop")]
@@ -268,6 +277,27 @@ impl Config {
             .get(name)
             .and_then(|a| a.model.clone())
             .unwrap_or_else(|| self.model.clone())
+    }
+
+    /// Model picked in the analyst settings panel (`~/.firm/agent/harness.json`).
+    /// The settings rail writes this marker; loom honors it as an override so
+    /// the panel's choice drives wakeups/reminders. Sits between an explicit
+    /// `--model`/`LOOM_MODEL` and the loom.yaml default — the explicit flag
+    /// still wins, the marker beats the checked-in config.
+    pub fn harness_model(&self) -> Option<String> {
+        let home = std::env::var("HOME").ok()?;
+        let p = PathBuf::from(&home)
+            .join(".firm")
+            .join("agent")
+            .join("harness.json");
+        let text = std::fs::read_to_string(p).ok()?;
+        let v: serde_json::Value = serde_json::from_str(&text).ok()?;
+        let model = v.get("model")?.as_str()?.trim();
+        if model.is_empty() {
+            None
+        } else {
+            Some(model.to_string())
+        }
     }
 
     pub fn agent(&self, name: &str) -> Option<&Agent> {

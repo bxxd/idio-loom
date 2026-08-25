@@ -1,4 +1,4 @@
-use idio_loom::{claude, config, meta, pattern, snapshot, thread};
+use idio_loom::{config, meta, pattern, prompt, snapshot, thread};
 
 use anyhow::{bail, Result};
 use config::Config;
@@ -163,12 +163,16 @@ fn thread_cmd(config: &Config, name: &str, args: &[String], flags: &Flags) -> Re
             let (source, positional_nudge) = parse_turn_args(remaining)?;
             let nudge = flags.nudge.as_deref().or(positional_nudge.as_deref());
 
-            // LOOM_MODEL env var as fallback for model override (for scripts)
+            // LOOM_MODEL env var as fallback for model override (for scripts).
+            // The harness marker (settings panel) sits below the explicit flag
+            // but above the checked-in loom.yaml default.
             let env_model = std::env::var("LOOM_MODEL").ok();
+            let harness_model = config.harness_model();
             let model_override = flags
                 .model
                 .as_deref()
                 .or(env_model.as_deref())
+                .or(harness_model.as_deref())
                 .filter(|s| !s.is_empty());
 
             let model_display = model_override
@@ -398,7 +402,7 @@ fn cmd_agents(config: &Config, sub: Option<&str>) -> Result<()> {
         let agent = &config.agents_map[*name];
         let model = agent.model.as_deref().unwrap_or(&config.model);
         println!("  {}  ({})", name, model);
-        let resolved = claude::resolve_at_refs(&agent.system_prompt, &config.agents_dir());
+        let resolved = prompt::resolve_at_refs(&agent.system_prompt, &config.agents_dir());
         let preview: String = resolved
             .trim()
             .lines()
@@ -427,7 +431,7 @@ fn show_agent(config: &Config, name: &str) -> Result<()> {
     println!("  model: {}", model);
     println!("  source: {}", agent.system_prompt.trim());
 
-    let resolved = claude::resolve_at_refs(&agent.system_prompt, &config.agents_dir());
+    let resolved = prompt::resolve_at_refs(&agent.system_prompt, &config.agents_dir());
     println!();
     for line in resolved.trim().lines() {
         println!("  {}", line);
@@ -450,7 +454,7 @@ fn cmd_init(flags: &Flags) -> Result<()> {
     if yaml_path.exists() && !flags.force {
         eprintln!("loom.yaml already exists -- use --force to overwrite");
     } else {
-        let content = "model: sonnet\ntimeout: 900\nworkshop: .\nsnapshots: true\n";
+        let content = "model: sonnet\nbackend: claude   # claude | pi\ntimeout: 900\nworkshop: .\nsnapshots: true\n";
         std::fs::write(&yaml_path, content)?;
         eprintln!("wrote {}", yaml_path.display());
     }
